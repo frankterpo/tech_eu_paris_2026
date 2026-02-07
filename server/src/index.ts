@@ -3,9 +3,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Orchestrator } from './orchestrator';
 import { PersistenceManager } from './persistence';
 import { toolRouter } from './tool-routes';
+import { createMcpServer } from './mcp-server';
 
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
@@ -14,6 +16,31 @@ const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// ── MCP Streamable HTTP endpoint ─────────────────────────────────────
+const mcpServer = createMcpServer();
+
+app.post('/mcp', async (req, res) => {
+  try {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on('close', () => { transport.close(); });
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err: any) {
+    console.error('[MCP] Error handling request:', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'MCP request failed' });
+    }
+  }
+});
+
+app.get('/mcp', async (req, res) => {
+  res.writeHead(405).end(JSON.stringify({ error: 'Method not allowed. Use POST for MCP requests.' }));
+});
+
+app.delete('/mcp', async (req, res) => {
+  res.writeHead(405).end(JSON.stringify({ error: 'Method not allowed.' }));
+});
 
 // ── DSL endpoints — serve agent YAMLs for Dify "Import from URL" ────
 const DSL_DIR = path.join(__dirname, '../../dify-workflows');
