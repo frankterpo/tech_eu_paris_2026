@@ -1,0 +1,340 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Deal Bot Tool APIs",
+    "description": "Tool endpoints for Dify Agent nodes — search knowledge via Cala and enrich companies via Specter. Keys managed server-side.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://5a341605806e28.lhr.life/api/tools",
+      "description": "Local development"
+    }
+  ],
+  "paths": {
+    "/cala/search": {
+      "post": {
+        "operationId": "calaSearch",
+        "summary": "Search knowledge base for evidence",
+        "description": "Search Cala's knowledge base for evidence relevant to a VC deal analysis query. Returns normalized evidence items with IDs that can be cited in analysis. Use specific, targeted queries — e.g., 'competitors of Specter in competitive intelligence platforms' or 'TAM for private markets data infrastructure 2024'.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Search query — be specific to your analyst specialization. E.g., 'market size competitive intelligence SaaS', 'Specter competitors private markets data', 'B2B SaaS traction benchmarks Series A'"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results with citable evidence items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "evidence_id": { "type": "string", "description": "Unique ID — use this in evidence_ids citations" },
+                          "title": { "type": "string" },
+                          "snippet": { "type": "string", "description": "Content excerpt — the actual evidence text" },
+                          "source": { "type": "string" },
+                          "url": { "type": "string" },
+                          "retrieved_at": { "type": "string" }
+                        }
+                      }
+                    },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/specter/enrich": {
+      "post": {
+        "operationId": "specterEnrich",
+        "summary": "Enrich a company by domain",
+        "description": "Retrieve structured company profile from Specter's database by domain name. Returns detailed profile (funding, headcount, growth stage, traction metrics, founders, HQ, industries) plus normalized evidence items. Use for the target company or any competitor you discover.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["domain"],
+                "properties": {
+                  "domain": {
+                    "type": "string",
+                    "description": "Company domain to enrich — e.g., 'tryspecter.com', 'crunchbase.com'"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Company profile and evidence items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "profile": {
+                      "type": "object",
+                      "description": "Structured company profile with all Specter data fields",
+                      "properties": {
+                        "specter_id": { "type": "string" },
+                        "name": { "type": "string" },
+                        "domain": { "type": "string" },
+                        "description": { "type": "string" },
+                        "growth_stage": { "type": "string" },
+                        "operating_status": { "type": "string" },
+                        "customer_focus": { "type": "string" },
+                        "founded_year": { "type": "integer", "nullable": true },
+                        "employee_count": { "type": "integer", "nullable": true },
+                        "employee_range": { "type": "string", "nullable": true },
+                        "industries": { "type": "array", "items": { "type": "string" } },
+                        "sub_industries": { "type": "array", "items": { "type": "string" } },
+                        "regions": { "type": "array", "items": { "type": "string" } },
+                        "highlights": { "type": "array", "items": { "type": "string" } },
+                        "founders": { "type": "array", "items": { "type": "string" } },
+                        "founder_count": { "type": "integer" },
+                        "investors": { "type": "array", "items": { "type": "string" } },
+                        "funding_total_usd": { "type": "number", "nullable": true },
+                        "funding_last_round_type": { "type": "string", "nullable": true },
+                        "web_monthly_visits": { "type": "integer", "nullable": true },
+                        "linkedin_followers": { "type": "integer", "nullable": true },
+                        "hq_city": { "type": "string", "nullable": true },
+                        "hq_country": { "type": "string", "nullable": true }
+                      }
+                    },
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "evidence_id": { "type": "string" },
+                          "title": { "type": "string" },
+                          "snippet": { "type": "string" },
+                          "source": { "type": "string" },
+                          "retrieved_at": { "type": "string" }
+                        }
+                      }
+                    },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/specter/similar": {
+      "post": {
+        "operationId": "specterSimilarCompanies",
+        "summary": "Find similar/competitor companies",
+        "description": "Given a Specter company ID, returns AI-matched similar companies. Use this to map the competitive landscape — find direct competitors, adjacent players, and comparable companies. The specter_id comes from the specterEnrich response. ALWAYS use this for competition analysis.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["company_id"],
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "description": "Specter company ID (from specterEnrich profile.specter_id or previous results)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Similar companies with evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "companies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "domain": { "type": "string" },
+                          "tagline": { "type": "string" },
+                          "growth_stage": { "type": "string" },
+                          "employee_count": { "type": "integer", "nullable": true },
+                          "founded_year": { "type": "integer", "nullable": true },
+                          "industries": { "type": "array", "items": { "type": "string" } },
+                          "funding_total_usd": { "type": "number", "nullable": true }
+                        }
+                      }
+                    },
+                    "evidence": { "type": "array", "items": { "type": "object" } },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/specter/people": {
+      "post": {
+        "operationId": "specterCompanyPeople",
+        "summary": "Get company team members and leadership",
+        "description": "Given a Specter company ID, returns the company's team members with titles, departments, and seniority. Use this to assess founding team quality, leadership depth, and organizational maturity. The specter_id comes from the specterEnrich response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["company_id"],
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "description": "Specter company ID (from specterEnrich profile.specter_id)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Team members and leadership evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "people": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "specter_person_id": { "type": "string" },
+                          "full_name": { "type": "string" },
+                          "title": { "type": "string" },
+                          "departments": { "type": "array", "items": { "type": "string" } },
+                          "seniority": { "type": "string" },
+                          "linkedin_url": { "type": "string", "nullable": true }
+                        }
+                      }
+                    },
+                    "evidence": { "type": "array", "items": { "type": "object" } },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/specter/search-name": {
+      "post": {
+        "operationId": "specterSearchName",
+        "summary": "Search companies by name",
+        "description": "Search Specter's database for companies by name. Use this to find specific competitors, investors, or companies mentioned in evidence. Returns basic company info with Specter IDs that can be used with specterSimilarCompanies and specterCompanyPeople.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Company name to search — e.g., 'Crunchbase', 'PitchBook', 'Dealroom'"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "domain": { "type": "string" },
+                          "tagline": { "type": "string" },
+                          "hq_city": { "type": "string" },
+                          "hq_country": { "type": "string" },
+                          "founded_year": { "type": "integer", "nullable": true }
+                        }
+                      }
+                    },
+                    "evidence": { "type": "array", "items": { "type": "object" } },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "toolHealth",
+        "summary": "Check tool API health",
+        "description": "Returns availability status of each tool backend.",
+        "responses": {
+          "200": {
+            "description": "Health status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cala": { "type": "boolean" },
+                    "specter": { "type": "boolean" },
+                    "status": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

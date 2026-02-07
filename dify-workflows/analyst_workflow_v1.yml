@@ -1,0 +1,339 @@
+app:
+  description: 'Deal Bot Org-Sim: Analyst persona — outputs atomic facts, contradictions, unknowns, evidence requests as validated strict JSON.'
+  icon: "\U0001F50D"
+  icon_background: '#E4FBCC'
+  mode: workflow
+  name: analyst_workflow_v1
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions: []
+      allowed_file_types: []
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        image_file_size_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: start-source-analyst-llm-target
+      selected: false
+      source: start
+      sourceHandle: source
+      target: analyst-llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: code
+      id: analyst-llm-source-validate-code-target
+      selected: false
+      source: analyst-llm
+      sourceHandle: source
+      target: validate-code
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: end
+      id: validate-code-source-end-target
+      selected: false
+      source: validate-code
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 'Collects deal data, evidence, specialization, and optional retry prompt.'
+        selected: false
+        title: Start
+        type: start
+        variables:
+        - label: Deal Input
+          max_length: 5000
+          options: []
+          required: true
+          type: paragraph
+          variable: deal_input
+        - label: Fund Config
+          max_length: 5000
+          options: []
+          required: false
+          type: paragraph
+          variable: fund_config
+        - label: Persona Config
+          max_length: 5000
+          options: []
+          required: false
+          type: paragraph
+          variable: persona_config
+        - label: Specialization
+          max_length: 200
+          options: []
+          required: true
+          type: text-input
+          variable: specialization
+        - label: Analyst ID
+          max_length: 200
+          options: []
+          required: false
+          type: text-input
+          variable: analyst_id
+        - label: Evidence JSON
+          max_length: 48000
+          options: []
+          required: false
+          type: paragraph
+          variable: evidence_json
+        - label: Company Profile
+          max_length: 24000
+          options: []
+          required: false
+          type: paragraph
+          variable: company_profile
+        - label: Prior Analyses
+          max_length: 48000
+          options: []
+          required: false
+          type: paragraph
+          variable: prior_analyses
+        - label: Retry Prompt
+          max_length: 5000
+          options: []
+          required: false
+          type: paragraph
+          variable: retry_prompt
+      height: 250
+      id: start
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 'Analyst LLM — forced JSON output mode.'
+        model:
+          completion_params:
+            temperature: 0.15
+            max_tokens: 2500
+            response_format: json_object
+          mode: chat
+          name: gpt-4o-mini
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: analyst-sys-prompt
+          role: system
+          text: >
+            You are a VC Analyst specializing EXCLUSIVELY in "{{#start.specialization#}}".
+
+            Your analyst_id is "{{#start.analyst_id#}}".
+
+
+            ## TASK
+
+            Analyze the deal below through the lens of YOUR specialization ONLY.
+            
+            - If your specialization is "market": focus on TAM/SAM/SOM, market dynamics, growth drivers, timing.
+            - If your specialization is "competition": focus on competitive landscape, moat, differentiation, substitutes, switching costs.
+            - If your specialization is "traction": focus on traction signals, revenue, users, partnerships, team execution velocity.
+
+            Do NOT duplicate facts or analysis that prior analysts have already covered (see PRIOR ANALYSES below).
+            Instead, build on their findings — reference gaps they flagged, challenge their assumptions, or add NEW facts from your domain.
+
+            Return a single JSON object — no markdown, no explanation, no text outside the JSON.
+
+
+            ## HARD CONSTRAINTS
+
+            - facts: array, MAX 12 items. Each item: {"text": "...", "evidence_ids": ["eid-..."]}
+              Every fact MUST cite at least one evidence_id. If you cannot cite evidence, do NOT include it as a fact.
+              Every fact MUST be unique — do NOT repeat facts from prior analysts.
+            - contradictions: array, MAX 8 items. Each: {"text": "...", "evidence_ids": ["eid-..."]}
+            - unknowns: array, MAX 8 items. Each: {"question": "...", "why": "..."}
+              Questions must be specific and testable — not vague.
+              Do NOT ask questions already raised by prior analysts.
+            - evidence_requests: array of follow-up queries. Each: {"query": "...", "reason": "..."}
+            - NO narrative. NO summaries. NO bullet prose. Atomic structured items ONLY.
+            - If evidence_json is empty, still produce unknowns and evidence_requests.
+
+
+            ## OUTPUT SCHEMA (strict)
+
+            {
+              "facts": [{"text": "string", "evidence_ids": ["string"]}],
+              "contradictions": [{"text": "string", "evidence_ids": ["string"]}],
+              "unknowns": [{"question": "string", "why": "string"}],
+              "evidence_requests": [{"query": "string", "reason": "string"}]
+            }
+
+
+            {{#start.retry_prompt#}}
+        - id: analyst-user-prompt
+          role: user
+          text: >
+            ## DEAL INPUT
+
+            {{#start.deal_input#}}
+
+
+            ## FUND CONFIG
+
+            {{#start.fund_config#}}
+
+
+            ## PERSONA CONFIG
+
+            {{#start.persona_config#}}
+
+
+            ## COMPANY PROFILE (structured data from Specter — use evidence_ids starting with "specter-" to cite)
+
+            {{#start.company_profile#}}
+
+
+            ## EVIDENCE (JSON array)
+
+            {{#start.evidence_json#}}
+
+
+            ## PRIOR ANALYSES (from other analysts — do NOT duplicate their work)
+
+            {{#start.prior_analyses#}}
+
+
+            Respond with ONLY the JSON object. No other text.
+        selected: false
+        title: Analyst LLM
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 98
+      id: analyst-llm
+      position:
+        x: 400
+        y: 282
+      positionAbsolute:
+        x: 400
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "import json\nimport re\n\ndef main(raw_text: str) -> dict:\n    # Strip markdown code fences if present\n    cleaned = raw_text.strip()\n    cleaned = re.sub(r'^```(?:json)?\\s*', '', cleaned)\n    cleaned = re.sub(r'\\s*```$', '', cleaned)\n    cleaned = cleaned.strip()\n\n    try:\n        data = json.loads(cleaned)\n    except json.JSONDecodeError as e:\n        return {\n            \"result\": json.dumps({\n                \"facts\": [],\n                \"contradictions\": [],\n                \"unknowns\": [{\"question\": \"JSON parse failed\", \"why\": str(e)}],\n                \"evidence_requests\": []\n            }),\n            \"valid\": \"false\",\n            \"error\": f\"JSON parse error: {str(e)}\"\n        }\n\n    # Enforce max lengths\n    facts = data.get(\"facts\", [])[:12]\n    contradictions = data.get(\"contradictions\", [])[:8]\n    unknowns = data.get(\"unknowns\", [])[:8]\n    evidence_requests = data.get(\"evidence_requests\", [])\n\n    validated = {\n        \"facts\": facts,\n        \"contradictions\": contradictions,\n        \"unknowns\": unknowns,\n        \"evidence_requests\": evidence_requests\n    }\n\n    return {\n        \"result\": json.dumps(validated),\n        \"valid\": \"true\",\n        \"error\": \"\"\n    }\n"
+        code_language: python3
+        desc: 'Parses LLM output, strips fences, enforces max array lengths, returns clean JSON.'
+        outputs:
+          result:
+            children: null
+            type: string
+          valid:
+            children: null
+            type: string
+          error:
+            children: null
+            type: string
+        selected: false
+        title: Validate JSON
+        type: code
+        variables:
+        - value_selector:
+          - analyst-llm
+          - text
+          variable: raw_text
+      height: 54
+      id: validate-code
+      position:
+        x: 720
+        y: 282
+      positionAbsolute:
+        x: 720
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: 'Returns validated JSON result, validity flag, and any error.'
+        outputs:
+        - value_selector:
+          - validate-code
+          - result
+          variable: result
+        - value_selector:
+          - validate-code
+          - valid
+          variable: valid
+        - value_selector:
+          - validate-code
+          - error
+          variable: error
+        selected: false
+        title: End
+        type: end
+      height: 90
+      id: end
+      position:
+        x: 1040
+        y: 282
+      positionAbsolute:
+        x: 1040
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+  hash: ''
