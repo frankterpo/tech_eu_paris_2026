@@ -1,0 +1,10 @@
+{
+  "name": "tech-eu-paris-2026",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "cd server && npm install",
+    "build": "cd server && npm run build",
+    "start": "cd server && node dist/index.js"
+  }
+}
