@@ -14,6 +14,7 @@ import { CalaClient } from './integrations/cala/client';
 import { SpecterClient, CompanyProfile } from './integrations/specter/client';
 import { Orchestrator } from './orchestrator';
 import { PersistenceManager } from './persistence';
+import type { GetPromptResult, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -469,6 +470,153 @@ export function createMcpServer(): McpServer {
       }
 
       return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    }
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // PROMPTS — guide AI on how to use tools intelligently
+  // ════════════════════════════════════════════════════════════════════
+
+  server.prompt(
+    'research-company',
+    'How to research a company step-by-step. Use this when a user asks about a company.',
+    {
+      company: z.string().describe('Company name or domain'),
+    },
+    async ({ company }): Promise<GetPromptResult> => {
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: [
+                `Research the company: ${company}`,
+                '',
+                'Follow this workflow:',
+                '',
+                '1. FIRST: Call `research_company` with the domain (or use `specter_search_name` if you only have a name).',
+                '   - This runs Specter (instant company profile) and Cala (market intelligence) in parallel.',
+                '   - Present the company overview to the user immediately.',
+                '',
+                '2. THEN: Based on what was found, offer to dig deeper:',
+                '   - `specter_company_people` → team assessment (founders, C-suite)',
+                '   - `specter_similar_companies` → competitive landscape',
+                '   - `cala_search` → specific questions (e.g. "latest funding round details")',
+                '',
+                '3. PRESENT FINDINGS as a structured brief:',
+                '   - Company snapshot (name, stage, HQ, funding)',
+                '   - Key strengths and signals',
+                '   - Potential risks or gaps',
+                '   - Recommendation for further investigation',
+                '',
+                'IMPORTANT: Always present Specter results first (they arrive instantly).',
+                'Never make the user wait for Cala if Specter has good data.',
+              ].join('\n'),
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  server.prompt(
+    'deal-analysis',
+    'Run a full VC deal analysis simulation for a company. Creates a deal, runs 3 analysts + associate + partner scoring.',
+    {
+      company_name: z.string().describe('Company name'),
+      domain: z.string().describe('Company domain'),
+      stage: z.string().optional().describe('Investment stage (seed, series_a, series_b)'),
+    },
+    async ({ company_name, domain, stage }): Promise<GetPromptResult> => {
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: [
+                `Run a full deal analysis for ${company_name} (${domain}).`,
+                '',
+                'Follow this workflow:',
+                '',
+                '1. FIRST: Call `research_company` to get the company profile and intelligence.',
+                '   Present a quick summary to the user.',
+                '',
+                '2. Call `create_deal` with the company details:',
+                `   - name: "${company_name}"`,
+                `   - domain: "${domain}"`,
+                `   - stage: "${stage || 'seed'}"`,
+                '',
+                '3. Call `run_deal` with the returned deal_id.',
+                '   Tell the user: "Simulation started — this takes 2-5 minutes."',
+                '',
+                '4. Poll `get_deal_state` every 30-60 seconds until the decision gate is populated.',
+                '   Update the user on progress:',
+                '   - "Gathering evidence..."',
+                '   - "Analysts reviewing..."',
+                '   - "Associate synthesizing..."',
+                '   - "Partner scoring..."',
+                '',
+                '5. Present the final results:',
+                '   - Rubric scores table (market, moat, why_now, execution, deal_fit)',
+                '   - Decision gate (STRONG_YES / PROCEED_IF / PASS)',
+                '   - Gating questions the IC should ask',
+              ].join('\n'),
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // RESOURCES — system context for AI clients
+  // ════════════════════════════════════════════════════════════════════
+
+  server.resource(
+    'system-instructions',
+    'dealbot://instructions',
+    { mimeType: 'text/markdown' },
+    async (): Promise<ReadResourceResult> => {
+      return {
+        contents: [
+          {
+            uri: 'dealbot://instructions',
+            text: [
+              '# Deal Bot: Org-Sim — System Instructions',
+              '',
+              'You are a VC deal analysis assistant powered by Deal Bot. You help investors research companies and make investment decisions.',
+              '',
+              '## Personality',
+              '- Direct and analytical — like a top-tier VC associate',
+              '- Present data before opinions',
+              '- Flag risks explicitly, don\'t sugarcoat',
+              '- Use tables and structured formats for clarity',
+              '',
+              '## Tool Priority',
+              '1. **Always start with `research_company`** — it runs Specter (fast) + Cala (parallel) in one call',
+              '2. Use `specter_search_name` only when you have a name but no domain',
+              '3. After initial research, offer targeted follow-ups:',
+              '   - Team deep dive → `specter_company_people`',
+              '   - Competitors → `specter_similar_companies`',
+              '   - Specific questions → `cala_search`',
+              '4. For full deal analysis → `create_deal` → `run_deal` → poll `get_deal_state`',
+              '',
+              '## Response Format',
+              '- Lead with a 1-2 sentence summary',
+              '- Use markdown tables for structured data',
+              '- End with suggested next actions',
+              '- Never dump raw JSON to the user',
+              '',
+              '## Available Data Sources',
+              '- **Specter**: Company profiles, funding, team, traction metrics, similar companies (~1s)',
+              '- **Cala**: Market intelligence, news, research reports (5-15s)',
+              '- **Deal Simulation**: 3-analyst pipeline → associate synthesis → partner scoring (2-5min)',
+            ].join('\n'),
+          },
+        ],
+      };
     }
   );
 
