@@ -6,8 +6,8 @@
  * Keys stay server-side — agents don't need to know API credentials.
  */
 import { Router } from 'express';
-import { CalaClient } from './integrations/cala/client';
-import { SpecterClient } from './integrations/specter/client';
+import { CalaClient } from './integrations/cala/client.js';
+import { SpecterClient } from './integrations/specter/client.js';
 
 export const toolRouter = Router();
 
@@ -158,7 +158,7 @@ toolRouter.post('/completion', async (req, res) => {
 
   const start = Date.now();
   try {
-    const { DifyClient } = await import('./integrations/dify/client');
+    const { DifyClient } = await import('./integrations/dify/client.js');
     const answer = await DifyClient.runCompletion(prompt.trim(), key);
     res.json({
       answer,

@@ -1,17 +1,17 @@
-import { Response } from 'express';
+import type { Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { DealInput, DealState, DealEvent, EventType } from './types';
-import { PersistenceManager } from './persistence';
-import { reduceState } from './reducer';
+import type { DealInput, DealState, DealEvent, EventType } from './types.js';
+import { PersistenceManager } from './persistence.js';
+import { reduceState } from './reducer.js';
 import {
   AnalystOutputSchema, AssociateOutputSchema, PartnerOutputSchema,
   enforceEvidenceRule,
   type AnalystOutput, type AssociateOutput, type PartnerOutput
-} from './validators';
-import { validateWithRetry } from './validate-with-retry';
-import { CalaClient } from './integrations/cala/client';
-import { DifyClient, type DifyAgentName } from './integrations/dify/client';
-import { SpecterClient } from './integrations/specter/client';
+} from './validators.js';
+import { validateWithRetry } from './validate-with-retry.js';
+import { CalaClient } from './integrations/cala/client.js';
+import { DifyClient, type DifyAgentName } from './integrations/dify/client.js';
+import { SpecterClient } from './integrations/specter/client.js';
 
 export class Orchestrator {
   private static streams: Map<string, Response[]> = new Map();

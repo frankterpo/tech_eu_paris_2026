@@ -1,4 +1,4 @@
-import { DealState, DealEvent, Evidence } from './types';
+import type { DealState, DealEvent, Evidence } from './types.js';
 
 /**
  * Pure reducer: given current state + a persisted event, returns new state.

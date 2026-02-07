@@ -1,4 +1,4 @@
-import { Evidence } from '../../types';
+import type { Evidence } from '../../types.js';
 
 export class CalaClient {
   private static readonly API_BASE = 'https://api.cala.ai/v1/knowledge/search';

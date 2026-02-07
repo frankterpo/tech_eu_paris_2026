@@ -1,4 +1,4 @@
-import { AnalystOutput, AssociateOutput, PartnerOutput } from '../../validators';
+import type { AnalystOutput, AssociateOutput, PartnerOutput } from '../../validators.js';
 
 export type DifyAgentName = 'analyst' | 'associate' | 'partner';
 

@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import { formatValidationErrors } from './validators';
+import type { z } from 'zod';
+import { formatValidationErrors } from './validators.js';
 
 /**
  * Validation result: either a valid parsed value or error details for re-prompt.

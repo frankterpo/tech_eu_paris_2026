@@ -1,4 +1,4 @@
-import { Evidence } from '../../types';
+import type { Evidence } from '../../types.js';
 
 export interface CompanyProfile {
   specter_id: string;

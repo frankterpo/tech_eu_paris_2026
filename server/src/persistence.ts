@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { DealState, DealEvent, DealInput } from './types';
+import { fileURLToPath } from 'node:url';
+import type { DealState, DealEvent, DealInput } from './types.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../data/deals');
 
 export class PersistenceManager {
