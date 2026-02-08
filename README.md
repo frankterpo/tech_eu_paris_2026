@@ -375,13 +375,85 @@ Each fund type has:
 
 ---
 
+## Demo Video
+
+> **[Watch the 2-minute demo on Loom](https://www.loom.com/share/c6b5f21eec2d4a5d9444ed12574f8646)**
+
+---
+
 ## Deployment
 
-### Alpic (Production)
+### Alpic — Cloud Deployment (Production)
+
+[Alpic](https://alpic.io) is a one-command deployment platform for Skybridge MCP servers. It handles containerization, SSL, environment injection, and CDN distribution — no Docker files, no CI/CD pipelines.
+
+**How it works:**
+1. `alpic deploy .` reads `alpic.json` + `.env`, bundles the build output, and pushes to Alpic's cloud.
+2. Alpic provisions a container with Node.js, injects all `.env` variables, and starts the server.
+3. The server is accessible at `https://tech-eu-paris-2026-0d53df71.alpic.live`.
+4. ChatGPT connects to the `/mcp` endpoint via the MCP protocol — all 30+ tools are auto-discovered.
+
+**Deploy command:**
 ```bash
 ALPIC_API_KEY=your_key alpic deploy .
 ```
-Deploys to: `https://tech-eu-paris-2026-{hash}.alpic.live`
+
+**What Alpic handles:**
+- Environment variable injection (all API keys from `.env`)
+- SSL termination (HTTPS)
+- Static asset serving (widget JS/CSS bundles)
+- Process management (auto-restart on crash)
+- File system: `process.cwd()` is writable for SQLite + deal data; `/tmp` fallback if needed
+
+**Configuration — `alpic.json`:**
+```json
+{
+  "name": "tech-eu-paris-2026",
+  "framework": "skybridge"
+}
+```
+
+### Dify Cloud — AI Agent Execution
+
+[Dify](https://dify.ai) powers the three AI persona agents (Analyst, Associate, Partner). Each agent runs as an **agent-chat** app with **function-calling** strategy, meaning the agent autonomously decides which tools to call, when, and how to chain results.
+
+**How it works:**
+1. The orchestrator sends a rich context prompt (company brief, evidence, investor lens) to each Dify agent via the `/chat-messages` endpoint (streaming mode).
+2. Each agent has access to our full tool suite (Cala, Specter, Tavily, etc.) via a custom **OpenAPI tool provider** configured in Dify.
+3. The agent makes 3-6 tool calls per execution, chaining results (e.g., Cala search → extract entities → Specter enrich competitors).
+4. The agent returns a structured JSON output matching our Zod schema (validated server-side with retry-on-failure).
+
+**Dify setup (3 agents):**
+
+| Agent | Dify App Type | Strategy | Env Key |
+|-------|---------------|----------|---------|
+| Analyst | agent-chat | function_call | `ANALYST_DIFY_KEY` |
+| Associate | agent-chat | function_call | `ASSOCIATE_DIFY_KEY` |
+| Partner | agent-chat | function_call | `PARTNER_DIFY_KEY` |
+
+**To recreate the agents in Dify Cloud:**
+1. Create a new **Agent** app (agent-chat mode)
+2. Add a **Custom Tool** provider named `dealbot_tools` pointing to the OpenAPI spec at `https://your-server/openapi-tools.json`
+3. Enable all tools in the agent's tool list
+4. Set model to `gpt-4o-mini`, temperature ≤ 0.2
+5. Set the system prompt to instruct JSON-only output matching the persona schema
+6. Copy the API key → set as the corresponding env variable
+
+**OpenAPI spec for Dify agents:** [`server/openapi-tools.json`](server/openapi-tools.json)
+
+**Stub mode:** If any Dify key is missing, the system automatically returns valid stub responses so the server always runs. This is useful for development without Dify.
+
+### fal.ai — Investment Memo Cover Art
+
+[fal.ai](https://fal.ai) generates AI cover images for the investment memo. When a deal analysis completes, the orchestrator fires a non-blocking image generation request in Wave 1 (parallel with analysts).
+
+**How it works:**
+1. `FalClient.generateMemoCover(companyName, industries)` sends a prompt to fal.ai's image generation API.
+2. The prompt describes a professional investment memo cover incorporating the company name and industry themes.
+3. The generated image URL is attached to the memo's cover slide.
+4. If fal.ai is unavailable or `FAL_AI_API_KEY` is missing, the memo renders without a cover image (graceful degradation).
+
+**Env key:** `FAL_AI_API_KEY`
 
 ### Local Development
 ```bash
@@ -390,9 +462,10 @@ npm run dev  # Starts Skybridge dev server on :3000
 
 ### ChatGPT Integration
 1. Deploy to Alpic (or use ngrok for local)
-2. In ChatGPT → Create a GPT → Add Action → MCP Server
-3. Point to your deployment URL
-4. The GPT auto-discovers all 30+ tools via MCP protocol
+2. In ChatGPT → Settings → Connected Apps → Add MCP Server
+3. Point to your deployment URL (e.g., `https://tech-eu-paris-2026-0d53df71.alpic.live`)
+4. ChatGPT auto-discovers all 30+ tools and 3 widgets via the MCP protocol
+5. Type a company domain to start — the GPT will call `company-profile` automatically
 
 ---
 

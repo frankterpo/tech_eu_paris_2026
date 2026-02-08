@@ -1,5 +1,7 @@
 # Deal Bot — 2-Minute Demo Script
 
+> **[Watch the demo on Loom](https://www.loom.com/share/c6b5f21eec2d4a5d9444ed12574f8646)**
+
 ## [0:00–0:10] HOOK
 
 **SAY:**
