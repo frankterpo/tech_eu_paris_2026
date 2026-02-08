@@ -1309,7 +1309,7 @@ const server = new McpServer(
 
   .registerTool("analyze_deal", {
     description:
-      "ONE-STEP deal analysis: creates a deal, starts the full simulation, and returns the deal_id for the dashboard. THIS IS THE PRIMARY TOOL when a user says 'analyze X', 'look at X as a deal', 'run a deal on X'. Always use this instead of separate create_deal + run_deal. After calling this, IMMEDIATELY show the deal-dashboard widget with the returned deal_id.",
+      "ONE-STEP deal analysis: creates a deal, starts the full simulation, and returns the deal_id. THIS IS THE PRIMARY TOOL when a user says 'analyze X', 'process deal', 'run a deal on X'. CRITICAL: After calling this tool, you MUST call the deal-dashboard widget with the returned deal_id IN THE SAME RESPONSE. Never return text-only — always show the dashboard.",
     inputSchema: {
       name: z.string().describe("Company name"),
       domain: z.string().describe("Company domain (e.g. mistral.ai)"),

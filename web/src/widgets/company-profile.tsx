@@ -1,7 +1,6 @@
 import "@/index.css";
-import { useEffect } from "react";
 import { mountWidget, useSendFollowUpMessage } from "skybridge/web";
-import { useToolInfo, useCallTool } from "../helpers.js";
+import { useToolInfo } from "../helpers.js";
 
 /* ── Types & helpers ──────────────────────────────────────────────── */
 function fmtMoney(n: number | null | undefined): string {
@@ -14,34 +13,15 @@ function fmtNum(n: number | null | undefined): string {
   return n ? n.toLocaleString() : "—";
 }
 
-// Module-level guards — survive widget remounts
-const _dashboardRequested = new Set<string>();
-
 /* ── Widget ────────────────────────────────────────────────────────── */
 function CompanyProfile() {
   const { isSuccess, output, isPending, input } =
     useToolInfo<"company-profile">();
   const sendFollowUp = useSendFollowUpMessage();
-  const analyze = useCallTool("analyze_deal");
 
   const data = output as any;
   const p = data?.profile;
   const existingDealId = data?.existing_deal_id;
-
-  // Auto-chain: after analyze_deal returns → request dashboard
-  useEffect(() => {
-    if (analyze.isSuccess && analyze.data?.structuredContent) {
-      const sc = analyze.data.structuredContent as any;
-      const key = sc.deal_id;
-      if (key && !_dashboardRequested.has(key)) {
-        _dashboardRequested.add(key);
-        const name = sc.name || p?.name || 'the company';
-        sendFollowUp(
-          `Show me the deal dashboard for ${name} (deal ID: ${key}). The analysis is running.`,
-        );
-      }
-    }
-  }, [analyze.isSuccess, analyze.data]);
 
   /* ── Loading ─────────────────────────────────────────────────── */
   if (isPending || !isSuccess || !output) {
@@ -177,49 +157,34 @@ function CompanyProfile() {
         <div className="cp-actions">
           <button
             className="cp-btn-process"
-            onClick={() => {
+            onClick={() =>
               sendFollowUp(
-                `Show me the deal dashboard for ${p.name} (deal ID: ${existingDealId}).`,
-              );
-            }}
+                `Show me the deal-dashboard for ${p.name} — deal_id is ${existingDealId}`,
+              )
+            }
           >
             View Deal Dashboard →
           </button>
           <button
             className="cp-btn-bench"
-            onClick={() => {
-              analyze.callTool({
-                name: p.name,
-                domain: p.domain,
-                stage: p.growth_stage || "seed",
-                geo: p.hq_country || "EU",
-              });
-            }}
+            onClick={() =>
+              sendFollowUp(
+                `Re-analyze ${p.name} (${p.domain}) as a deal. Use analyze_deal, then immediately show the deal-dashboard with the returned deal_id.`,
+              )
+            }
           >
-            Re-run Analysis
+            Re-run ↻
           </button>
-        </div>
-      ) : analyze.isPending || analyze.isSuccess ? (
-        <div className="cp-processing">
-          <span className="cala-pulse" />
-          <span>
-            {analyze.isPending
-              ? "Creating deal & launching agents..."
-              : `Analysis running — opening dashboard…`}
-          </span>
         </div>
       ) : (
         <div className="cp-actions">
           <button
             className="cp-btn-process"
-            onClick={() => {
-              analyze.callTool({
-                name: p.name,
-                domain: p.domain,
-                stage: p.growth_stage || "seed",
-                geo: p.hq_country || "EU",
-              });
-            }}
+            onClick={() =>
+              sendFollowUp(
+                `Analyze ${p.name} (${p.domain}) as a deal — use analyze_deal with name="${p.name}" domain="${p.domain}" stage="${p.growth_stage || 'seed'}" geo="${p.hq_country || 'EU'}", then IMMEDIATELY show the deal-dashboard widget with the returned deal_id. Do both in one response.`,
+              )
+            }
           >
             Process Deal →
           </button>
@@ -227,7 +192,7 @@ function CompanyProfile() {
             className="cp-btn-bench"
             onClick={() =>
               sendFollowUp(
-                `Bench ${p.name} (${p.domain}) for later review. Save the profile and move on.`,
+                `Bench ${p.name} (${p.domain}) for later review.`,
               )
             }
           >
