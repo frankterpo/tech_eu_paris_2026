@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'node:url';
 import type { DealState, DealEvent, DealInput } from './types.js';
 import * as db from './db.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '../../data/deals');
+// Use process.cwd() — __dirname resolves to dist/ inside containers (e.g. /var/server/dist)
+// which makes ../../data point to /var/data (read-only). cwd() is the project root and writable.
+const DATA_DIR = path.join(process.cwd(), 'data/deals');
 
 export class PersistenceManager {
   // ── Current run context (set by orchestrator at the start of each run) ──

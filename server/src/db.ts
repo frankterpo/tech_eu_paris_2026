@@ -22,7 +22,6 @@
  * File: data/dealbot.sqlite (WAL mode, foreign keys enforced)
  */
 import path from 'path';
-import { fileURLToPath } from 'node:url';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -35,8 +34,8 @@ try {
   console.warn(`[DB] better-sqlite3 not available (${err.message}) — running in file-only mode`);
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '../../data');
+// Use process.cwd() — __dirname resolves to dist/ inside containers
+const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'dealbot.sqlite');
 
 let db: any = null;
