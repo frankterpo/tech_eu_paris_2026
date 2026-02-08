@@ -398,11 +398,80 @@ export class PersistenceManager {
 
   // ── DB query helpers (pass-through) ──────────────────────────────
   static listDeals(opts?: { limit?: number; offset?: number; status?: string }) {
-    return db.listDeals(opts);
+    const dbResult = db.listDeals(opts);
+    if (dbResult && dbResult.length > 0) return dbResult;
+    // File-based fallback: scan data/deals/ directories
+    return this.listDealsFromFiles(opts?.limit || 50);
   }
 
   static findDealByNameOrDomain(query: string) {
-    return db.findDealByNameOrDomain(query);
+    const dbResult = db.findDealByNameOrDomain(query);
+    if (dbResult) return dbResult;
+    // File-based fallback: scan deal state files
+    return this.findDealFromFiles(query);
+  }
+
+  /** Scan data/deals/ for state.json files — used when DB is unavailable */
+  private static listDealsFromFiles(limit: number): any[] {
+    if (!fs.existsSync(DATA_DIR)) return [];
+    try {
+      const dirs = fs.readdirSync(DATA_DIR).filter(d => {
+        const stateFile = path.join(DATA_DIR, d, 'state.json');
+        return fs.existsSync(stateFile);
+      });
+      return dirs.slice(0, limit).map(id => {
+        try {
+          const state: DealState = JSON.parse(fs.readFileSync(path.join(DATA_DIR, id, 'state.json'), 'utf-8'));
+          const avgScore = state.rubric
+            ? Math.round(Object.values(state.rubric).reduce((s: number, d: any) => s + (d?.score || 0), 0) / 5)
+            : 0;
+          return {
+            id,
+            name: state.deal_input?.name || 'Unknown',
+            domain: state.deal_input?.domain || '',
+            stage: state.deal_input?.fund_config?.stage || '',
+            status: state.decision_gate?.decision ? 'complete' : 'in_progress',
+            latest_decision: state.decision_gate?.decision || null,
+            latest_avg_score: avgScore || null,
+            evidence_count: state.evidence?.length || 0,
+          };
+        } catch { return null; }
+      }).filter(Boolean);
+    } catch { return []; }
+  }
+
+  /** Scan data/deals/ for a deal matching name or domain */
+  private static findDealFromFiles(query: string): any | null {
+    if (!fs.existsSync(DATA_DIR)) return null;
+    const q = query.trim().toLowerCase();
+    try {
+      const dirs = fs.readdirSync(DATA_DIR);
+      for (const id of dirs) {
+        const stateFile = path.join(DATA_DIR, id, 'state.json');
+        if (!fs.existsSync(stateFile)) continue;
+        try {
+          const state: DealState = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+          const name = (state.deal_input?.name || '').toLowerCase();
+          const domain = (state.deal_input?.domain || '').toLowerCase();
+          if (domain === q || name === q || name.includes(q) || domain.includes(q)) {
+            const avgScore = state.rubric
+              ? Math.round(Object.values(state.rubric).reduce((s: number, d: any) => s + (d?.score || 0), 0) / 5)
+              : 0;
+            return {
+              id,
+              name: state.deal_input?.name || 'Unknown',
+              domain: state.deal_input?.domain || '',
+              stage: state.deal_input?.fund_config?.stage || '',
+              status: state.decision_gate?.decision ? 'complete' : 'in_progress',
+              latest_decision: state.decision_gate?.decision || null,
+              latest_avg_score: avgScore || null,
+              evidence_count: state.evidence?.length || 0,
+            };
+          }
+        } catch { continue; }
+      }
+    } catch { /* ignore */ }
+    return null;
   }
 
   static getDealStats() { return db.getDealStats(); }

@@ -21,23 +21,32 @@
  * All PKs are UUIDs (TEXT). All timestamps are ISO-8601 TEXT.
  * File: data/dealbot.sqlite (WAL mode, foreign keys enforced)
  */
-import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
+// Dynamic import of better-sqlite3 — native module may not be available on all platforms (e.g., Alpic containers).
+// If it fails to load, the entire DB layer becomes a no-op and file persistence is the sole source of truth.
+let DatabaseConstructor: any = null;
+try {
+  DatabaseConstructor = (await import('better-sqlite3')).default;
+} catch (err: any) {
+  console.warn(`[DB] better-sqlite3 not available (${err.message}) — running in file-only mode`);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../data');
 const DB_PATH = path.join(DATA_DIR, 'dealbot.sqlite');
 
-let db: Database.Database | null = null;
+let db: any = null;
 
-function getDb(): Database.Database | null {
+function getDb(): any {
   if (db) return db;
+  if (!DatabaseConstructor) return null;
   try {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    db = new Database(DB_PATH);
+    db = new DatabaseConstructor(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = OFF'); // OFF during hackathon — file persistence is source of truth
     initSchema(db);
@@ -53,7 +62,7 @@ function getDb(): Database.Database | null {
 // SCHEMA
 // ═══════════════════════════════════════════════════════════════════════
 
-function initSchema(db: Database.Database) {
+function initSchema(db: any) {
   db.exec(`
     -- ── Users ──────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS users (

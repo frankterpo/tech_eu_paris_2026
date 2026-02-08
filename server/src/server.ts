@@ -74,12 +74,18 @@ const server = new McpServer(
         textParts.push(`Company not found for domain: ${domain}`);
       }
 
+      // Check for existing deal
+      const existingDeal = PersistenceManager.findDealByNameOrDomain(domain);
+
       return {
         content: [{ type: "text" as const, text: textParts.join("\n") }],
         structuredContent: {
           profile,
           domain,
           name: name || profile?.name || domain,
+          existing_deal_id: existingDeal?.id || null,
+          existing_deal_status: existingDeal?.status || null,
+          existing_deal_decision: existingDeal?.latest_decision || null,
         },
       };
     },

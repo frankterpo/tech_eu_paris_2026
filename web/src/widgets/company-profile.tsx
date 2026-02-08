@@ -15,44 +15,33 @@ function fmtNum(n: number | null | undefined): string {
 }
 
 // Module-level guards — survive widget remounts
-const _dealFired = new Set<string>();
-const _runFired = new Set<string>();
+const _dashboardRequested = new Set<string>();
 
 /* ── Widget ────────────────────────────────────────────────────────── */
 function CompanyProfile() {
   const { isSuccess, output, isPending, input } =
     useToolInfo<"company-profile">();
   const sendFollowUp = useSendFollowUpMessage();
-  const deal = useCallTool("create_deal");
-  const run = useCallTool("run_deal");
+  const analyze = useCallTool("analyze_deal");
 
   const data = output as any;
   const p = data?.profile;
+  const existingDealId = data?.existing_deal_id;
 
-  // Auto-chain: create_deal → run_deal → show dashboard
+  // Auto-chain: after analyze_deal returns → request dashboard
   useEffect(() => {
-    if (deal.isSuccess && deal.data?.structuredContent) {
-      const sc = deal.data.structuredContent as any;
+    if (analyze.isSuccess && analyze.data?.structuredContent) {
+      const sc = analyze.data.structuredContent as any;
       const key = sc.deal_id;
-      if (key && !_runFired.has(key)) {
-        _runFired.add(key);
-        run.callTool({ deal_id: key });
-      }
-    }
-  }, [deal.isSuccess, deal.data]);
-
-  useEffect(() => {
-    if (run.isSuccess && deal.data?.structuredContent) {
-      const sc = deal.data.structuredContent as any;
-      const key = sc.deal_id;
-      if (key && !_dealFired.has(key)) {
-        _dealFired.add(key);
+      if (key && !_dashboardRequested.has(key)) {
+        _dashboardRequested.add(key);
+        const name = sc.name || p?.name || 'the company';
         sendFollowUp(
-          `Show me the live deal dashboard for deal ${key} — Mistral AI analysis is running.`,
+          `Show me the deal dashboard for ${name} (deal ID: ${key}). The analysis is running.`,
         );
       }
     }
-  }, [run.isSuccess, deal.data]);
+  }, [analyze.isSuccess, analyze.data]);
 
   /* ── Loading ─────────────────────────────────────────────────── */
   if (isPending || !isSuccess || !output) {
@@ -84,10 +73,6 @@ function CompanyProfile() {
       </div>
     );
   }
-
-  /* ── Processing state (deal created, running) ──────────────── */
-  const isProcessing = deal.isPending || deal.isSuccess;
-  const dealId = (deal.data?.structuredContent as any)?.deal_id;
 
   /* ── Compact profile ─────────────────────────────────────────── */
   return (
@@ -188,15 +173,39 @@ function CompanyProfile() {
       )}
 
       {/* ═══ ACTIONS ═══ */}
-      {isProcessing ? (
+      {existingDealId ? (
+        <div className="cp-actions">
+          <button
+            className="cp-btn-process"
+            onClick={() => {
+              sendFollowUp(
+                `Show me the deal dashboard for ${p.name} (deal ID: ${existingDealId}).`,
+              );
+            }}
+          >
+            View Deal Dashboard →
+          </button>
+          <button
+            className="cp-btn-bench"
+            onClick={() => {
+              analyze.callTool({
+                name: p.name,
+                domain: p.domain,
+                stage: p.growth_stage || "seed",
+                geo: p.hq_country || "EU",
+              });
+            }}
+          >
+            Re-run Analysis
+          </button>
+        </div>
+      ) : analyze.isPending || analyze.isSuccess ? (
         <div className="cp-processing">
           <span className="cala-pulse" />
           <span>
-            {deal.isPending
-              ? "Creating deal..."
-              : run.isPending
-                ? "Launching analysts..."
-                : `Analysis running — deal ${dealId?.slice(0, 8)}…`}
+            {analyze.isPending
+              ? "Creating deal & launching agents..."
+              : `Analysis running — opening dashboard…`}
           </span>
         </div>
       ) : (
@@ -204,7 +213,7 @@ function CompanyProfile() {
           <button
             className="cp-btn-process"
             onClick={() => {
-              deal.callTool({
+              analyze.callTool({
                 name: p.name,
                 domain: p.domain,
                 stage: p.growth_stage || "seed",
