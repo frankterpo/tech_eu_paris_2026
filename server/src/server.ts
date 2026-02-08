@@ -186,6 +186,7 @@ const server = new McpServer(
       return {
         content: [{ type: "text" as const, text: textParts.join("\n") }],
         structuredContent: {
+          deal_id,
           ...state,
           pipeline: {
             analysts,

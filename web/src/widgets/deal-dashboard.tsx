@@ -768,20 +768,28 @@ function InvestorProfileBadge({ firmType, aum, dealId, onSwitch }: {
 /* ── Widget ─────────────────────────────────────────────────────────── */
 function DealDashboard() {
   const { isSuccess, output, isPending, input } = useToolInfo<"deal-dashboard">();
-  const { callTool: refresh, isPending: isRefreshing } = useCallTool("deal-dashboard");
+  const refreshCall = useCallTool("deal-dashboard");
   const sendFollowUp = useSendFollowUpMessage();
   const [retrying, setRetrying] = React.useState(false);
   const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const isRefreshing = refreshCall.isPending;
+  const refresh = refreshCall.callTool;
+
+  // Use refreshed data when available, fall back to initial output
+  const latestOutput = (refreshCall.isSuccess && refreshCall.data?.structuredContent)
+    ? refreshCall.data.structuredContent
+    : output;
+
   // Determine if pipeline is actively running (not complete)
-  const d = (isSuccess && output) ? output as unknown as DashboardData : null;
+  const d = (isSuccess && latestOutput) ? latestOutput as unknown as DashboardData : null;
+  const dealId = d?.deal_id || (input as any)?.deal_id || "";
   const isRunning = d ? !d.isComplete && !d.error : false;
 
-  // Auto-poll every 5s while running
+  // Auto-poll every 3s while running
   React.useEffect(() => {
-    if (isRunning && !pollRef.current) {
+    if (isRunning && dealId && !pollRef.current) {
       pollRef.current = setInterval(() => {
-        const dealId = d?.deal_id || (input as any)?.deal_id || "";
         if (dealId) refresh({ deal_id: dealId });
       }, 3000);
     }
@@ -790,7 +798,7 @@ function DealDashboard() {
       pollRef.current = null;
     }
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
-  }, [isRunning]);
+  }, [isRunning, dealId]);
 
   if (isPending || !isSuccess || !output) {
     return <div className="loading">Loading deal analysis...</div>;
