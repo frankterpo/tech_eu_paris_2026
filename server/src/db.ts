@@ -34,8 +34,16 @@ try {
   console.warn(`[DB] better-sqlite3 not available (${err.message}) — running in file-only mode`);
 }
 
-// Use process.cwd() — __dirname resolves to dist/ inside containers
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Resolve data dir: try cwd first, fall back to /tmp if cwd is read-only
+const CWD_DB_DIR = path.join(process.cwd(), 'data');
+const TMP_DB_DIR = '/tmp/dealbot/data';
+let DATA_DIR = CWD_DB_DIR;
+try {
+  fs.mkdirSync(CWD_DB_DIR, { recursive: true });
+} catch {
+  DATA_DIR = TMP_DB_DIR;
+  try { fs.mkdirSync(TMP_DB_DIR, { recursive: true }); } catch {}
+}
 const DB_PATH = path.join(DATA_DIR, 'dealbot.sqlite');
 
 let db: any = null;

@@ -3,9 +3,19 @@ import path from 'path';
 import type { DealState, DealEvent, DealInput } from './types.js';
 import * as db from './db.js';
 
-// Use process.cwd() — __dirname resolves to dist/ inside containers (e.g. /var/server/dist)
-// which makes ../../data point to /var/data (read-only). cwd() is the project root and writable.
-const DATA_DIR = path.join(process.cwd(), 'data/deals');
+// Resolve data dir: try cwd first, fall back to /tmp if cwd is read-only
+const CWD_DATA = path.join(process.cwd(), 'data/deals');
+const TMP_DATA = '/tmp/dealbot/data/deals';
+
+let DATA_DIR = CWD_DATA;
+try {
+  fs.mkdirSync(CWD_DATA, { recursive: true });
+} catch {
+  console.warn(`[Persistence] Cannot write to ${CWD_DATA} — falling back to ${TMP_DATA}`);
+  DATA_DIR = TMP_DATA;
+  fs.mkdirSync(TMP_DATA, { recursive: true });
+}
+console.log(`[Persistence] DATA_DIR = ${DATA_DIR} (cwd = ${process.cwd()})`);
 
 export class PersistenceManager {
   // ── Current run context (set by orchestrator at the start of each run) ──

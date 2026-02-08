@@ -15,6 +15,8 @@ import type { DealInput } from "./types.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Try multiple .env locations: cwd first (Alpic), then relative to __dirname (local dev)
+dotenv.config({ path: path.join(process.cwd(), ".env") });
 dotenv.config({ path: path.join(__dirname, "../../.env") });
 
 const app = express() as Express;
@@ -47,7 +49,7 @@ if (env === "production") {
 }
 
 // ── DSL endpoints — serve agent YAMLs for Dify ──────────────────────
-const DSL_DIR = path.join(__dirname, "../../dify-workflows");
+const DSL_DIR = path.join(process.cwd(), "dify-workflows");
 
 app.get("/dsl/:name", (req: Request, res: Response) => {
   const name = String(req.params.name).replace(/[^a-z0-9_\-]/gi, "");
