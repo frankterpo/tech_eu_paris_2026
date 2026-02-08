@@ -34,7 +34,7 @@ const server = new McpServer(
     },
     {
       description:
-        "Primary research tool. Returns instant company profile from Specter (~1s). Market intelligence from Cala loads automatically in the widget. Always start here.",
+        "STEP 1: Research a company. Returns instant profile from Specter. After showing this, ask the user if they want to run a full deal analysis — if yes, call analyze_deal with the company name and domain, then IMMEDIATELY show deal-dashboard with the returned deal_id.",
       inputSchema: {
         domain: z.string().describe("Company domain (e.g. mistral.ai, stripe.com)"),
         name: z.string().optional().describe("Company name (optional)"),
@@ -62,6 +62,14 @@ const server = new McpServer(
           textParts.push(`Total raised: $${(profile.funding_total_usd / 1e6).toFixed(1)}M`);
         if (profile.founders?.length) textParts.push(`Founders: ${profile.founders.join(", ")}`);
         textParts.push(`Specter ID: ${profile.specter_id}`);
+
+        // Check if deal already exists
+        const existingDeal = PersistenceManager.findDealByNameOrDomain(domain);
+        if (existingDeal) {
+          textParts.push(`\nExisting deal found: ${existingDeal.id} (${existingDeal.status || 'in_progress'}). Show deal-dashboard with deal_id="${existingDeal.id}" to view results.`);
+        } else {
+          textParts.push(`\nNo deal exists yet. Ask the user if they want to run a full deal analysis — if yes, call analyze_deal with name="${profile.name}" and domain="${domain}".`);
+        }
       } else {
         textParts.push(`Company not found for domain: ${domain}`);
       }
@@ -89,9 +97,9 @@ const server = new McpServer(
     },
     {
       description:
-        "Get the current state of a deal analysis with visual rubric scores and decision gate.",
+        "STEP 3: Show deal analysis dashboard. Use this IMMEDIATELY after analyze_deal or run_deal returns a deal_id. Also use when user says 'show dashboard', 'check progress', 'view results'. If user asks for a deal but you don't have the deal_id, use lookup_deal first to find it by company name.",
       inputSchema: {
-        deal_id: z.string().describe("Deal ID"),
+        deal_id: z.string().describe("Deal ID (from analyze_deal, create_deal, lookup_deal, or list_deals)"),
       },
       _meta: {
         "openai/widgetAccessible": true,
@@ -710,7 +718,7 @@ const server = new McpServer(
   })
 
   .registerTool("create_deal", {
-    description: "Create a new deal analysis session. IMPORTANT: Always ask the user for firm_type, aum, and any known deal terms (ticket_size, valuation, round_type, etc.) — these calibrate the entire analysis and are archived per-run for time-series tracking. Returns a deal_id to use with run_deal.",
+    description: "Create a deal analysis session WITHOUT running it. Prefer analyze_deal instead (which creates AND runs in one step). Only use create_deal if you need to set detailed deal terms (ticket_size, valuation, etc.) before running. Returns a deal_id — call run_deal next, then show deal-dashboard.",
     inputSchema: {
       name: z.string().describe("Company name"),
       domain: z.string().describe("Company domain"),
@@ -781,7 +789,7 @@ const server = new McpServer(
 
   .registerTool("run_deal", {
     description:
-      "Start the full deal simulation (analysts → associate → partner). Takes 2-5 min. Use deal-dashboard to view results.",
+      "Start/re-run the simulation for an existing deal. Prefer analyze_deal for new deals (creates + runs in one step). After calling this, IMMEDIATELY show deal-dashboard with the same deal_id.",
     inputSchema: {
       deal_id: z.string().describe("Deal ID from create_deal"),
     },
@@ -1283,6 +1291,147 @@ const server = new McpServer(
       return {
         content: [{ type: "text" as const, text: `**${result.title || url}**\n\n${result.content.slice(0, 3000)}` }],
         structuredContent: { ...result, source: 'lightpanda' },
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  })
+
+  // ══════════════════════════════════════════════════════════════════
+  // DEAL WORKFLOW — streamlined UX: analyze, list, lookup
+  // ══════════════════════════════════════════════════════════════════
+
+  .registerTool("analyze_deal", {
+    description:
+      "ONE-STEP deal analysis: creates a deal, starts the full simulation, and returns the deal_id for the dashboard. THIS IS THE PRIMARY TOOL when a user says 'analyze X', 'look at X as a deal', 'run a deal on X'. Always use this instead of separate create_deal + run_deal. After calling this, IMMEDIATELY show the deal-dashboard widget with the returned deal_id.",
+    inputSchema: {
+      name: z.string().describe("Company name"),
+      domain: z.string().describe("Company domain (e.g. mistral.ai)"),
+      stage: z.string().optional().describe("Investment stage (seed, series_a, series_b, growth, late)"),
+      geo: z.string().optional().describe("Geographic focus (EU, US, Global)"),
+      sector: z.string().optional().describe("Sector (AI, Fintech, SaaS, etc.)"),
+      firm_type: z.enum(["angel", "early_vc", "growth_vc", "late_vc", "pe", "ib"]).optional().describe("Investor type"),
+      aum: z.string().optional().describe("Assets under management"),
+    },
+  }, async ({ name, domain, stage, geo, sector, firm_type, aum }) => {
+    try {
+      // Check if deal already exists for this company
+      const existing = PersistenceManager.findDealByNameOrDomain(domain || name);
+      if (existing) {
+        // Re-run simulation on existing deal
+        Orchestrator.runSimulation(existing.id).catch((err) =>
+          console.error(`Sim error: ${err.message}`),
+        );
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Deal already exists for ${name}. Re-running simulation.\nDeal ID: ${existing.id}\n\nUse the deal-dashboard widget with deal_id="${existing.id}" to track progress.`,
+          }],
+          structuredContent: { deal_id: existing.id, name: existing.name, domain: existing.domain, rerun: true },
+        };
+      }
+
+      // Create new deal
+      const dealId = await Orchestrator.createDeal({
+        name,
+        domain,
+        firm_type: firm_type as any,
+        aum,
+        fund_config: { stage: stage || "seed", geo: geo || "EU", sector: sector || "", thesis: "" },
+        persona_config: {
+          analysts: [
+            { specialization: "market" },
+            { specialization: "competition" },
+            { specialization: "traction" },
+          ],
+          deal_config: { stage: stage || "seed", geo: geo || "EU", sector: sector || "" },
+        },
+      });
+
+      // Start simulation immediately
+      Orchestrator.runSimulation(dealId).catch((err) =>
+        console.error(`Sim error: ${err.message}`),
+      );
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Deal created and simulation started for ${name} (${domain}).\nDeal ID: ${dealId}\n\nNow show the deal-dashboard widget with deal_id="${dealId}" to track live progress.`,
+        }],
+        structuredContent: { deal_id: dealId, name, domain, firm_type: firm_type || 'early_vc', aum },
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${err.message}` }],
+        isError: true,
+      };
+    }
+  })
+
+  .registerTool("list_deals", {
+    description:
+      "List all deal analysis sessions with their IDs, names, domains, status, and scores. Use when the user asks 'show my deals', 'what deals have I run', 'find deal for X'. Returns deal_id values that can be used with deal-dashboard widget.",
+    inputSchema: {},
+  }, async () => {
+    try {
+      const deals = PersistenceManager.listDeals({ limit: 20 });
+      if (!deals.length) {
+        return {
+          content: [{ type: "text" as const, text: "No deals yet. Use analyze_deal or create_deal to start." }],
+          structuredContent: { deals: [] },
+        };
+      }
+      const lines = [
+        `# Your Deals (${deals.length})`,
+        "",
+        "| # | Company | Domain | Status | Decision | Score | Deal ID |",
+        "|---|---------|--------|--------|----------|-------|---------|",
+      ];
+      deals.forEach((d: any, i: number) => {
+        const score = d.latest_avg_score ? `${d.latest_avg_score}/100` : '—';
+        const decision = d.latest_decision || '—';
+        const status = d.status || 'pending';
+        lines.push(`| ${i + 1} | ${d.name} | ${d.domain || '—'} | ${status} | ${decision} | ${score} | \`${d.id}\` |`);
+      });
+      lines.push(`\nTo view any deal: use the **deal-dashboard** widget with the deal_id.`);
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        structuredContent: { deals },
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  })
+
+  .registerTool("lookup_deal", {
+    description:
+      "Find a deal by company name or domain. Use when the user says 'show me the Mistral deal', 'open deal for stripe.com', 'what was the score for X'. Returns the deal_id and current state summary. Then show deal-dashboard with that ID.",
+    inputSchema: {
+      query: z.string().describe("Company name or domain to search for (e.g. 'Mistral AI', 'mistral.ai', 'stripe')"),
+    },
+  }, async ({ query }) => {
+    try {
+      const deal = PersistenceManager.findDealByNameOrDomain(query);
+      if (!deal) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `No deal found for "${query}". Use analyze_deal to create and run one.`,
+          }],
+          structuredContent: { found: false, query },
+        };
+      }
+      const state = PersistenceManager.getState(deal.id);
+      const evidenceCount = state?.evidence?.length || 0;
+      const decision = state?.decision_gate?.decision || deal.latest_decision || 'pending';
+      const score = deal.latest_avg_score || 0;
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Found: **${deal.name}** (${deal.domain})\nDeal ID: ${deal.id}\nStatus: ${deal.status || 'in_progress'} | Decision: ${decision} | Score: ${score}/100 | Evidence: ${evidenceCount} items\n\nShow the deal-dashboard widget with deal_id="${deal.id}" to view full results.`,
+        }],
+        structuredContent: { found: true, deal_id: deal.id, ...deal, evidenceCount, decision },
       };
     } catch (err: any) {
       return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };

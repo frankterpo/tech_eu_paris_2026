@@ -440,6 +440,20 @@ export function listDeals(opts?: { limit?: number; offset?: number; status?: str
 
 export function getDealFull(dealId: string) { return get(`SELECT * FROM deals WHERE id = ?`, dealId); }
 
+export function findDealByNameOrDomain(query: string): any | null {
+  const q = query.trim().toLowerCase();
+  // Exact domain match first
+  const byDomain = get(`SELECT id, name, domain, stage, sector, geo, status, latest_decision, latest_avg_score, evidence_count, run_count, created_at, updated_at FROM deals WHERE LOWER(domain) = ? ORDER BY updated_at DESC LIMIT 1`, q);
+  if (byDomain) return byDomain;
+  // Exact name match
+  const byName = get(`SELECT id, name, domain, stage, sector, geo, status, latest_decision, latest_avg_score, evidence_count, run_count, created_at, updated_at FROM deals WHERE LOWER(name) = ? ORDER BY updated_at DESC LIMIT 1`, q);
+  if (byName) return byName;
+  // Fuzzy name match (LIKE) — use named params since get() accepts a single params object
+  const pattern = `%${q}%`;
+  const byLike = get(`SELECT id, name, domain, stage, sector, geo, status, latest_decision, latest_avg_score, evidence_count, run_count, created_at, updated_at FROM deals WHERE LOWER(name) LIKE @p OR LOWER(domain) LIKE @p ORDER BY updated_at DESC LIMIT 1`, { p: pattern });
+  return byLike || null;
+}
+
 export function getDealStats(): { total: number; complete: number; avgScore: number; decisions: Record<string, number> } {
   const total = (get(`SELECT COUNT(*) as c FROM deals`) as any)?.c || 0;
   const complete = (get(`SELECT COUNT(*) as c FROM deals WHERE status = 'complete'`) as any)?.c || 0;

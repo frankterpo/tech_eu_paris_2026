@@ -401,6 +401,10 @@ export class PersistenceManager {
     return db.listDeals(opts);
   }
 
+  static findDealByNameOrDomain(query: string) {
+    return db.findDealByNameOrDomain(query);
+  }
+
   static getDealStats() { return db.getDealStats(); }
   static getToolStats() { return db.getToolStats(); }
 
