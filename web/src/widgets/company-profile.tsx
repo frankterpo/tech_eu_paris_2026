@@ -1,209 +1,231 @@
 import "@/index.css";
-import { mountWidget, useLayout, useSendFollowUpMessage } from "skybridge/web";
+import { useEffect } from "react";
+import { mountWidget, useSendFollowUpMessage } from "skybridge/web";
 import { useToolInfo, useCallTool } from "../helpers.js";
 
-// Types for structured content (mirrors server output)
-interface CompanyProfileData {
-  profile: any;
-  calaEvidence: any[];
-  domain: string;
-  name: string;
-}
-
-function formatMoney(n: number | null | undefined): string {
-  if (!n) return "N/A";
+/* ── Types & helpers ──────────────────────────────────────────────── */
+function fmtMoney(n: number | null | undefined): string {
+  if (!n) return "—";
   if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
   if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
-  return `$${n}`;
+  return `$${(n / 1e3).toFixed(0)}K`;
+}
+function fmtNum(n: number | null | undefined): string {
+  return n ? n.toLocaleString() : "—";
 }
 
-function formatNum(n: number | null | undefined): string {
-  if (!n) return "N/A";
-  return n.toLocaleString();
-}
+// Module-level guards — survive widget remounts
+const _dealFired = new Set<string>();
+const _runFired = new Set<string>();
 
-function scoreColor(score: number): string {
-  if (score >= 70) return "score-high";
-  if (score >= 40) return "score-mid";
-  return "score-low";
-}
-
+/* ── Widget ────────────────────────────────────────────────────────── */
 function CompanyProfile() {
-  const { isSuccess, output, isPending } = useToolInfo<"company-profile">();
-  const { theme } = useLayout();
+  const { isSuccess, output, isPending, input } =
+    useToolInfo<"company-profile">();
   const sendFollowUp = useSendFollowUpMessage();
-  const { callTool: searchName, isPending: isSearching } = useCallTool("company-profile");
+  const deal = useCallTool("create_deal");
+  const run = useCallTool("run_deal");
 
+  const data = output as any;
+  const p = data?.profile;
+
+  // Auto-chain: create_deal → run_deal → show dashboard
+  useEffect(() => {
+    if (deal.isSuccess && deal.data?.structuredContent) {
+      const sc = deal.data.structuredContent as any;
+      const key = sc.deal_id;
+      if (key && !_runFired.has(key)) {
+        _runFired.add(key);
+        run.callTool({ deal_id: key });
+      }
+    }
+  }, [deal.isSuccess, deal.data]);
+
+  useEffect(() => {
+    if (run.isSuccess && deal.data?.structuredContent) {
+      const sc = deal.data.structuredContent as any;
+      const key = sc.deal_id;
+      if (key && !_dealFired.has(key)) {
+        _dealFired.add(key);
+        sendFollowUp(
+          `Show me the live deal dashboard for deal ${key} — Mistral AI analysis is running.`,
+        );
+      }
+    }
+  }, [run.isSuccess, deal.data]);
+
+  /* ── Loading ─────────────────────────────────────────────────── */
   if (isPending || !isSuccess || !output) {
-    return <div className="loading">Researching company...</div>;
-  }
-
-  const { profile: p, calaEvidence, name } = output.structuredContent as CompanyProfileData;
-
-  if (!p) {
     return (
-      <div className="widget company-card">
-        <div className="company-header">
-          <div className="company-avatar">?</div>
-          <div>
-            <div className="company-name">{name}</div>
-            <div className="company-tagline">Company not found in Specter</div>
-          </div>
-        </div>
-        {calaEvidence?.length > 0 && (
-          <div className="intel-section">
-            <div className="section-title">Market Intelligence ({calaEvidence.length})</div>
-            {calaEvidence.slice(0, 5).map((item: any, i: number) => (
-              <div key={i} className="intel-item">
-                <div className="intel-title">{item.title}</div>
-                <div className="intel-snippet">{item.snippet}</div>
-              </div>
-            ))}
-          </div>
-        )}
+      <div className="loading">
+        {input?.domain
+          ? `Researching ${input.name || input.domain}...`
+          : "Researching company..."}
       </div>
     );
   }
 
+  /* ── Not found ───────────────────────────────────────────────── */
+  if (!p) {
+    return (
+      <div className="widget cp-compact">
+        <div className="cp-name">{data?.name || "Unknown"}</div>
+        <div className="cp-meta">Company not found in Specter</div>
+        <button
+          className="action-btn"
+          onClick={() =>
+            sendFollowUp(
+              `Search for ${data?.name || data?.domain} by name in Specter`,
+            )
+          }
+        >
+          Search by Name
+        </button>
+      </div>
+    );
+  }
+
+  /* ── Processing state (deal created, running) ──────────────── */
+  const isProcessing = deal.isPending || deal.isSuccess;
+  const dealId = (deal.data?.structuredContent as any)?.deal_id;
+
+  /* ── Compact profile ─────────────────────────────────────────── */
   return (
-    <div className="widget company-card" data-llm={`Company: ${p.name}, Stage: ${p.growth_stage}, Funding: ${formatMoney(p.funding_total_usd)}`}>
-      {/* Header */}
-      <div className="company-header">
-        <div className="company-avatar">{p.name?.[0] || "?"}</div>
+    <div
+      className="widget cp-compact"
+      data-llm={`Company: ${p.name}, Stage: ${p.growth_stage}, Funding: ${fmtMoney(p.funding_total_usd)}, Employees: ${p.employee_count}`}
+    >
+      {/* Row 1: Identity */}
+      <div className="cp-row-id">
+        <img
+          className="cp-logo"
+          src={`https://app.tryspecter.com/logo?domain=${p.domain}`}
+          alt={p.name}
+        />
         <div>
-          <div className="company-name">{p.name}</div>
-          <div className="company-tagline">
-            {p.tagline || p.description?.slice(0, 80) || p.domain}
+          <div className="cp-name">
+            {p.domain ? (
+              <a
+                className="cp-name-link"
+                href={`https://www.${p.domain.replace(/^www\./i, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {p.name} <span className="cp-ext">↗</span>
+              </a>
+            ) : (
+              p.name
+            )}
           </div>
-          <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
-            <span className="badge badge-stage">{p.growth_stage}</span>
-            <span className="badge badge-status">{p.operating_status}</span>
+          <div className="cp-meta">
+            {p.domain}
+            {p.hq_country ? ` · ${p.hq_city || p.hq_country}` : ""}
+            {p.growth_stage ? ` · ${p.growth_stage}` : ""}
           </div>
         </div>
       </div>
 
-      {/* Key Stats */}
-      <div className="stat-grid">
-        <div className="stat-card">
-          <div className="stat-label">Raised</div>
-          <div className="stat-value">{formatMoney(p.funding_total_usd)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Employees</div>
-          <div className="stat-value">{formatNum(p.employee_count)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Founded</div>
-          <div className="stat-value">{p.founded_year || "N/A"}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">HQ</div>
-          <div className="stat-value">{p.hq_city ? `${p.hq_city}, ${p.hq_country}` : p.hq_country || "N/A"}</div>
-        </div>
+      {/* Wrong company? */}
+      <button
+        className="cp-wrong-btn"
+        onClick={() =>
+          sendFollowUp(
+            `That's not the right company. Search for "${p.name}" by name in Specter and show me the results so I can pick the correct one.`,
+          )
+        }
+      >
+        Not this company? Try a different domain
+      </button>
+
+      {/* Row 2: Key numbers — single line */}
+      <div className="cp-nums">
+        <span>
+          <b>{fmtMoney(p.funding_total_usd)}</b> raised
+        </span>
+        <span className="cp-sep">|</span>
+        <span>
+          <b>{fmtNum(p.employee_count)}</b> team
+        </span>
+        <span className="cp-sep">|</span>
+        <span>
+          <b>{fmtNum(p.web_monthly_visits)}</b>/mo visits
+        </span>
+        {p.founded_year && (
+          <>
+            <span className="cp-sep">|</span>
+            <span>Est. {p.founded_year}</span>
+          </>
+        )}
       </div>
 
-      {/* Funding */}
-      {(p.funding_last_round_type || p.investors?.length > 0) && (
-        <div>
-          <div className="section-title">Funding</div>
-          {p.funding_last_round_type && (
-            <div style={{ fontSize: 13 }}>
-              Last round: <strong>{p.funding_last_round_type}</strong>
-              {p.funding_last_round_usd ? ` (${formatMoney(p.funding_last_round_usd)})` : ""}
-            </div>
-          )}
-          {p.investors?.length > 0 && (
-            <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
-              {p.investors.slice(0, 6).join(" · ")}
-              {p.investors.length > 6 && ` +${p.investors.length - 6} more`}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Founders */}
+      {/* Row 3: Founders (one line, hyperlinked to LinkedIn search) */}
       {p.founders?.length > 0 && (
-        <div>
-          <div className="section-title">Founders ({p.founder_count})</div>
-          <div className="founders-list">
-            {p.founders.map((f: string, i: number) => (
-              <span key={i} className="founder-chip">{f}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Traction */}
-      {(p.web_monthly_visits || p.linkedin_followers) && (
-        <div className="stat-grid">
-          {p.web_monthly_visits && (
-            <div className="stat-card">
-              <div className="stat-label">Web Traffic</div>
-              <div className="stat-value">{formatNum(p.web_monthly_visits)}/mo</div>
-            </div>
-          )}
-          {p.linkedin_followers && (
-            <div className="stat-card">
-              <div className="stat-label">LinkedIn</div>
-              <div className="stat-value">{formatNum(p.linkedin_followers)}</div>
-            </div>
-          )}
-          {p.twitter_followers && (
-            <div className="stat-card">
-              <div className="stat-label">Twitter</div>
-              <div className="stat-value">{formatNum(p.twitter_followers)}</div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Signals */}
-      {p.highlights?.length > 0 && (
-        <div>
-          <div className="section-title">Growth Signals</div>
-          <div className="signals-list">
-            {p.highlights.slice(0, 8).map((s: string, i: number) => (
-              <span key={i} className="signal-tag">{s}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Market Intel (Cala) */}
-      {calaEvidence?.length > 0 && (
-        <div className="intel-section">
-          <div className="section-title">Market Intelligence ({calaEvidence.length})</div>
-          {calaEvidence.slice(0, 4).map((item: any, i: number) => (
-            <div key={i} className="intel-item">
-              <div className="intel-title">{item.title}</div>
-              <div className="intel-snippet">{item.snippet}</div>
-            </div>
+        <div className="cp-founders">
+          {p.founders.slice(0, 3).map((f: string, i: number) => (
+            <span key={i}>
+              {i > 0 && " · "}
+              <a
+                className="cp-founder-link"
+                href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(f + " " + (p.name || ""))}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {f} ↗
+              </a>
+            </span>
           ))}
+          {p.founders.length > 3 && ` +${p.founders.length - 3}`}
         </div>
       )}
 
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        <button
-          onClick={() => sendFollowUp(`Show me the team and leadership at ${p.name} (Specter ID: ${p.specter_id})`)}
-          style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 12 }}
-        >
-          👥 Team
-        </button>
-        <button
-          onClick={() => sendFollowUp(`Find competitors similar to ${p.name} (Specter ID: ${p.specter_id})`)}
-          style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 12 }}
-        >
-          🏢 Competitors
-        </button>
-        <button
-          onClick={() => sendFollowUp(`Run a full deal analysis for ${p.name} (${p.domain})`)}
-          style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ddd", background: "#667eea", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
-        >
-          ⚖️ Deal Analysis
-        </button>
-      </div>
+      {/* Row 4: One-liner description */}
+      {p.description && (
+        <div className="cp-desc">
+          {p.description.length > 120
+            ? p.description.slice(0, 120) + "…"
+            : p.description}
+        </div>
+      )}
+
+      {/* ═══ ACTIONS ═══ */}
+      {isProcessing ? (
+        <div className="cp-processing">
+          <span className="cala-pulse" />
+          <span>
+            {deal.isPending
+              ? "Creating deal..."
+              : run.isPending
+                ? "Launching analysts..."
+                : `Analysis running — deal ${dealId?.slice(0, 8)}…`}
+          </span>
+        </div>
+      ) : (
+        <div className="cp-actions">
+          <button
+            className="cp-btn-process"
+            onClick={() => {
+              deal.callTool({
+                name: p.name,
+                domain: p.domain,
+                stage: p.growth_stage || "seed",
+                geo: p.hq_country || "EU",
+              });
+            }}
+          >
+            Process Deal →
+          </button>
+          <button
+            className="cp-btn-bench"
+            onClick={() =>
+              sendFollowUp(
+                `Bench ${p.name} (${p.domain}) for later review. Save the profile and move on.`,
+              )
+            }
+          >
+            Bench
+          </button>
+        </div>
+      )}
     </div>
   );
 }

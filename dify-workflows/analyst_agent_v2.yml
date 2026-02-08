@@ -10,7 +10,7 @@ kind: app
 model_config:
   agent_mode:
     enabled: true
-    max_iteration: 12
+    max_iteration: 15
     strategy: function_call
     tools:
     - enabled: true
@@ -63,6 +63,206 @@ model_config:
       tool_name: specterSearchName
       tool_parameters:
         query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Company By ID
+      tool_name: specterCompanyById
+      tool_parameters:
+        company_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Enrich Person
+      tool_name: specterEnrichPerson
+      tool_parameters:
+        linkedin_url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Text Search
+      tool_name: specterTextSearch
+      tool_parameters:
+        text: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Query
+      tool_name: calaQuery
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Search Entities
+      tool_name: calaSearchEntities
+      tool_parameters:
+        name: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Tavily Web Search
+      tool_name: tavilyWebSearch
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Tavily Extract
+      tool_name: tavilyExtract
+      tool_parameters:
+        urls: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Get Entity
+      tool_name: calaGetEntity
+      tool_parameters:
+        entity_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Person By ID
+      tool_name: specterPersonById
+      tool_parameters:
+        person_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Person Email
+      tool_name: specterPersonEmail
+      tool_parameters:
+        person_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: '[SLOW] Tavily Crawl'
+      tool_name: tavilyCrawl
+      tool_parameters:
+        url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: '[VERY SLOW] Tavily Research'
+      tool_name: tavilyResearch
+      tool_parameters:
+        input: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Tavily Research Status
+      tool_name: tavilyResearchStatus
+      tool_parameters: {}
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: 'Web Extract (legacy)'
+      tool_name: webExtract
+      tool_parameters:
+        url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Dify Agent (FunctionCalling)
+      tool_name: difyAgentFC
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Dify Agent (ReAct)
+      tool_name: difyAgentReAct
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: '[SLOW] Lightpanda Scrape'
+      tool_name: lightpandaScrape
+      tool_parameters:
+        url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Create Trigger
+      tool_name: calaCreateTrigger
+      tool_parameters:
+        query: ''
+        email: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Subscribe Trigger
+      tool_name: calaSubscribeTrigger
+      tool_parameters:
+        trigger_id: ''
+        email: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala List Triggers
+      tool_name: calaListTriggers
+      tool_parameters: {}
   annotation_reply:
     enabled: false
   chat_prompt_config: {}
@@ -103,39 +303,86 @@ model_config:
 
     ## YOUR TOOLS — USE THEM ALL, AGGRESSIVELY
 
-    You have 6 research tools. You MUST call multiple tools before writing your analysis. More data = better analysis.
+    You have 26 research tools. You MUST call multiple tools before writing your analysis. More data = better analysis.
 
-    1. **Cala Search** — Search knowledge bases for market data, news, reports, competitor intel.
-       Call this 3-5 times with DIFFERENT queries targeted to your specialization:
-       - If specialization is "market": search for TAM/SAM data, market growth rates, industry reports, customer segments
-       - If specialization is "competition": search for competitors, market share, moat analysis, alternatives, barriers to entry
-       - If specialization is "traction": search for company metrics, growth signals, partnerships, team news, funding history
+    ### PRIMARY TOOLS (Cala + Specter — use FIRST, ALWAYS)
 
-    2. **Specter Enrich** — Enrich a company by domain. Returns structured profile (funding, headcount, growth stage, traction signals, investors, HQ).
-       Call this for the TARGET COMPANY's domain AND for any KEY COMPETITORS you discover.
+    1. **Cala Search** (`calaSearch`) — Search knowledge bases for market data, news, reports, competitor intel.
+       Call 3-5 times with DIFFERENT queries. Read the `entities` array in each response and CHAIN follow-up queries using entity names.
+    2. **Cala Query** (`calaQuery`) — Structured data extraction. Better than calaSearch for precise numbers: revenue, funding amounts, headcount, market size.
+    3. **Cala Search Entities** (`calaSearchEntities`) — Fuzzy search for companies, people, locations by name. Returns entity IDs for deeper lookup.
+    4. **Cala Get Entity** (`calaGetEntity`) — Get full entity details by Cala entity ID. Use after calaSearchEntities finds an entity.
 
-    3. **Specter Similar Companies** — Given a Specter company_id (from the company profile below), returns AI-matched competitors and adjacent companies.
-       MANDATORY for "competition" specialization. Useful for all specializations to understand landscape.
+    5. **Specter Enrich** (`specterEnrich`) — Enrich company by domain. Returns funding, headcount, growth stage, traction, founders, HQ.
+       Call for the TARGET COMPANY and any KEY COMPETITORS you discover.
+    6. **Specter Similar Companies** (`specterSimilarCompanies`) — AI-matched competitors by Specter ID.
+       MANDATORY for "competition" specialization. Returns competitor IDs — use specterCompanyById to get full profiles.
+    7. **Specter Company By ID** (`specterCompanyById`) — Get full company profile by Specter ID.
+       USE THIS to enrich competitors found via specterSimilarCompanies (they return IDs, not full profiles).
+    8. **Specter Company People** (`specterCompanyPeople`) — Full team with titles, seniority, departments.
+       MANDATORY for "traction" specialization.
+    9. **Specter Enrich Person** (`specterEnrichPerson`) — Full person profile by LinkedIn URL.
+       Career history, education, highlights (prior_exit, serial_founder). USE for founder diligence.
+    10. **Specter Person By ID** (`specterPersonById`) — Get person profile by Specter person ID.
+    11. **Specter Person Email** (`specterPersonEmail`) — Get verified email for a person by Specter person ID.
+    12. **Specter Search Name** (`specterSearchName`) — Search companies by name. Use for competitors mentioned in other results.
+    13. **Specter Text Search** (`specterTextSearch`) — Extract company/investor entities from unstructured text (press releases, bios). Max 1000 chars.
 
-    4. **Specter Company People** — Given a Specter company_id, returns the full team with titles, seniority, departments.
-       MANDATORY for "traction" specialization. Assess leadership depth, founder backgrounds, key hire gaps.
+    ### FAST WEB TOOLS (Tavily — use AFTER Cala + Specter)
 
-    5. **Specter Search Name** — Search companies by name. Use this to look up specific competitors or companies mentioned in other results.
+    14. **Tavily Web Search** (`tavilyWebSearch`) — Real-time web search for recent news, funding rounds, product launches. ~2s. Call 1-3 times.
+    15. **Tavily Extract** (`tavilyExtract`) — Extract content from URLs. Use when evidence contains links that need deeper analysis. ~3s.
 
-    6. **Tavily Web Search** — Real-time web search. Use this for recent news, press releases, product launches, funding announcements.
-       Call this 1-3 times for current information that knowledge bases may not have.
+    ### DEEP WEB TOOLS (slow but powerful — use sparingly when fast tools are insufficient)
+
+    16. **Tavily Crawl** (`tavilyCrawl`) — ⚠️ SLOW (~30-60s). Crawl a website graph. Only use when you need to map an entire site structure.
+    17. **Tavily Research** (`tavilyResearch`) — ⚠️ VERY SLOW (~60-120s, ASYNC). Comprehensive multi-search research report. Returns a request_id — poll with tavilyResearchStatus. Only use for deep-dive research that justifies the wait.
+    18. **Tavily Research Status** (`tavilyResearchStatus`) — Poll for async tavilyResearch results.
+    19. **Web Extract** (`webExtract`) — Legacy URL scraper. Prefer tavilyExtract.
+
+    ### ADVANCED / META TOOLS
+
+    20. **Lightpanda Scrape** (`lightpandaScrape`) — ⚠️ SLOW (~10-30s). Headless browser scrape for JS-heavy SPAs that regular fetch cannot render.
+    21. **Dify Agent FC** (`difyAgentFC`) — Delegate a sub-task to a FunctionCalling sub-agent.
+    22. **Dify Agent ReAct** (`difyAgentReAct`) — Delegate a sub-task to a ReAct reasoning sub-agent.
+
+    ### TRIGGER MANAGEMENT
+
+    23. **Cala Create Trigger** (`calaCreateTrigger`) — Create a monitoring trigger on Cala.
+    24. **Cala Subscribe Trigger** (`calaSubscribeTrigger`) — Subscribe an email to an existing trigger.
+    25. **Cala List Triggers** (`calaListTriggers`) — List all Cala triggers.
+
+    ### UTILITY
+
+    26. **Tool Health** (`toolHealth`) — Check availability of all tool backends.
+
+    ### TOOL CHAINING STRATEGY
+
+    specterSimilarCompanies → returns competitor IDs → specterCompanyById for each → full profiles
+    specterCompanyPeople → returns people with LinkedIn URLs → specterEnrichPerson for founders → career history
+    calaSearchEntities → returns entity IDs → calaGetEntity for full details
+    calaSearch → returns entities (PERSON, ORG) → use names in follow-up calaSearch queries
 
 
     ## TOOL STRATEGY BY SPECIALIZATION
 
-    - **market**: 3+ Cala queries (TAM, growth rates, customer segments) + Tavily (recent market reports) + specterSimilarCompanies (landscape sizing)
-    - **competition**: specterSimilarCompanies (MUST call first) + specterEnrich on top 3 competitors + Cala (competitive positioning) + Tavily (recent competitive moves)
-    - **traction**: specterCompanyPeople (MUST call first) + Cala (revenue, metrics, founder track record) + Tavily (recent news, product launches) + specterEnrich (verify claims)
+    - **market**: calaSearch ×3+ (TAM, growth, segments) + specterSimilarCompanies (landscape sizing) + specterCompanyById (competitor scale) + tavilyWebSearch (recent reports)
+    - **competition**: specterSimilarCompanies (MUST call first) → specterCompanyById on top 3-5 → calaSearch (competitive positioning) + tavilyWebSearch (recent moves)
+    - **traction**: specterCompanyPeople (MUST call first) → specterEnrichPerson (founder LinkedIn) + calaSearch (revenue, metrics) + tavilyWebSearch (recent launches)
+
+
+    ## SPEED GUIDELINES
+
+    - Aim for 5-10 tool calls. Quality over quantity.
+    - Prefer `tavilyWebSearch` (~2s) over `tavilyCrawl` (~30-60s) and `tavilyResearch` (~60-120s) for most web lookups.
+    - Only use slow tools (tavilyCrawl, tavilyResearch, lightpandaScrape) when fast alternatives didn't give you what you need.
+    - Cala + Specter are fastest and have the best structured data — always try them first.
+    - Complete ALL tool calls in rounds 1-4, then output JSON. No more than 5 rounds.
 
 
     ## TASK
 
-    1. FIRST: Use your tools to gather evidence relevant to your specialization. Make AT LEAST 5 tool calls total.
+    1. FIRST: Use your tools to gather evidence relevant to your specialization. Aim for 5-8 tool calls.
     2. THEN: Analyze the deal through the lens of YOUR specialization ONLY.
 
     Do NOT duplicate facts or analysis that prior analysts have already covered (see PRIOR ANALYSES below).

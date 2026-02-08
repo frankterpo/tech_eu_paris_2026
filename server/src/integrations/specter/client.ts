@@ -44,6 +44,8 @@ export interface CompanyProfile {
   // Contact
   hq_city: string | null;
   hq_country: string | null;
+  // Branding
+  logo_url: string | null;
 }
 
 export interface SpecterPerson {
@@ -53,6 +55,22 @@ export interface SpecterPerson {
   departments: string[];
   seniority: string;
   linkedin_url?: string;
+  profile_picture_url?: string | null;
+  about?: string | null;
+  tagline?: string | null;
+  location?: string | null;
+  highlights?: string[];
+  years_of_experience?: number | null;
+  education_level?: string | null;
+  skills?: string[];
+  current_position_company_name?: string | null;
+}
+
+export interface SpecterEntity {
+  source_name: string;
+  context: 'primary' | 'active' | 'passive';
+  entity_id: string;
+  entity_type: 'company' | 'investor';
 }
 
 export interface SimilarCompany {
@@ -111,43 +129,83 @@ export class SpecterClient {
   // ── Similar companies ─────────────────────────────────────────────
   /**
    * GET /companies/{companyId}/similar
-   * Returns AI-matched similar companies — crucial for competitive analysis.
+   * Returns an array of Specter company IDs (strings).
+   * We auto-enrich the top N to return full SimilarCompany objects.
    */
-  static async getSimilarCompanies(companyId: string): Promise<{ companies: SimilarCompany[]; evidence: Evidence[] }> {
-    if (!this.getKey()) return { companies: [], evidence: [] };
+  static async getSimilarCompanies(
+    companyId: string,
+    opts?: { limit?: number; enrichTop?: number; growthStage?: string }
+  ): Promise<{ companies: SimilarCompany[]; evidence: Evidence[]; rawIds: string[] }> {
+    if (!this.getKey()) return { companies: [], evidence: [], rawIds: [] };
 
     try {
       console.log(`[Specter] Similar companies for ID: ${companyId}`);
-      const data = await this.apiFetch(`${this.API_BASE}/companies/${companyId}/similar`);
-      const results = Array.isArray(data) ? data : (data.results || data.data || []);
+      const queryParams = new URLSearchParams();
+      if (opts?.limit) queryParams.set('limit', String(opts.limit));
+      if (opts?.growthStage) queryParams.set('growth_stage', opts.growthStage);
+      const qs = queryParams.toString() ? `?${queryParams.toString()}` : '';
 
-      const companies: SimilarCompany[] = results.map((r: any) => ({
-        id: r.id || '',
-        name: r.name || r.organization_name || '',
-        domain: r.domain || r.website?.domain || '',
-        tagline: r.tagline,
-        hq_city: r.hq?.city,
-        hq_country: r.hq?.country,
-        growth_stage: r.growth_stage,
-        employee_count: r.employee_count,
-        founded_year: r.founded_year,
-        industries: r.industries || [],
-        funding_total_usd: r.funding?.total_funding_usd ?? r.funding_total_usd ?? null,
-      }));
+      const data = await this.apiFetch(`${this.API_BASE}/companies/${companyId}/similar${qs}`);
 
-      const evidence: Evidence[] = companies.slice(0, 10).map((c, i) => ({
-        evidence_id: `specter-similar-${i}`,
-        title: `Similar company: ${c.name}`,
-        snippet: `${c.name} (${c.domain}) — ${c.tagline || 'N/A'} | Stage: ${c.growth_stage || '?'} | Employees: ${c.employee_count || '?'} | HQ: ${c.hq_city || '?'}, ${c.hq_country || '?'} | Industries: ${c.industries?.join(', ') || '?'}${c.funding_total_usd ? ` | Funding: $${(c.funding_total_usd / 1e6).toFixed(1)}M` : ''}`,
-        source: 'specter-similar',
-        retrieved_at: new Date().toISOString()
-      }));
+      // API returns a flat array of string IDs: ["id1", "id2", ...]
+      const rawIds: string[] = (Array.isArray(data) ? data : []).filter(
+        (item: any) => typeof item === 'string' && item.length > 0
+      );
 
-      console.log(`[Specter] Found ${companies.length} similar companies`);
-      return { companies, evidence };
+      console.log(`[Specter] Found ${rawIds.length} similar company IDs`);
+
+      // Auto-enrich the top N IDs into full profiles (parallel, bounded)
+      const enrichCount = opts?.enrichTop ?? Math.min(rawIds.length, 10);
+      const toEnrich = rawIds.slice(0, enrichCount);
+      const enrichResults = await Promise.allSettled(
+        toEnrich.map(id => this.getCompanyById(id))
+      );
+
+      const companies: SimilarCompany[] = [];
+      const evidence: Evidence[] = [];
+      const now = new Date().toISOString();
+
+      for (let i = 0; i < enrichResults.length; i++) {
+        const result = enrichResults[i];
+        if (result.status === 'fulfilled' && result.value.profile) {
+          const p = result.value.profile;
+          companies.push({
+            id: p.specter_id || toEnrich[i],
+            name: p.name,
+            domain: p.domain,
+            tagline: p.tagline || undefined,
+            hq_city: p.hq_city || undefined,
+            hq_country: p.hq_country || undefined,
+            growth_stage: p.growth_stage,
+            employee_count: p.employee_count ?? undefined,
+            founded_year: p.founded_year ?? undefined,
+            industries: p.industries || [],
+            funding_total_usd: p.funding_total_usd ?? undefined,
+          });
+          evidence.push({
+            evidence_id: `specter-similar-${i}`,
+            title: `Similar company: ${p.name}`,
+            snippet: `${p.name} (${p.domain}) — ${p.tagline || 'N/A'} | Stage: ${p.growth_stage || '?'} | Employees: ${p.employee_count || '?'} | HQ: ${p.hq_city || '?'}, ${p.hq_country || '?'} | Industries: ${p.industries?.join(', ') || '?'}${p.funding_total_usd ? ` | Funding: $${(p.funding_total_usd / 1e6).toFixed(1)}M` : ''}`,
+            source: 'specter-similar',
+            retrieved_at: now,
+          });
+        } else {
+          // Failed enrichment — include bare ID
+          companies.push({
+            id: toEnrich[i],
+            name: `(ID: ${toEnrich[i]})`,
+            domain: '',
+            industries: [],
+            funding_total_usd: undefined,
+          });
+        }
+      }
+
+      console.log(`[Specter] Enriched ${companies.filter(c => c.name && !c.name.startsWith('(ID:')).length}/${toEnrich.length} similar companies`);
+      return { companies, evidence, rawIds };
     } catch (err: any) {
       console.warn(`[Specter] Similar companies failed: ${err.message}`);
-      return { companies: [], evidence: [] };
+      return { companies: [], evidence: [], rawIds: [] };
     }
   }
 
@@ -165,12 +223,21 @@ export class SpecterClient {
       const results = Array.isArray(data) ? data : (data.results || data.data || []);
 
       const people: SpecterPerson[] = results.map((r: any) => ({
-        specter_person_id: r.id || r.specter_person_id || '',
-        full_name: r.full_name || r.name || '',
-        title: r.title || r.job_title || '',
+        specter_person_id: r.id || r.person_id || r.specter_person_id || '',
+        full_name: r.full_name || r.name || `${r.first_name || ''} ${r.last_name || ''}`.trim(),
+        title: r.title || r.current_position_title || r.job_title || '',
         departments: r.departments || [],
-        seniority: r.seniority || '',
+        seniority: r.seniority || r.level_of_seniority || '',
         linkedin_url: r.linkedin_url || r.socials?.linkedin?.url,
+        profile_picture_url: r.profile_picture_url || null,
+        about: r.about || null,
+        tagline: r.tagline || null,
+        location: r.location || null,
+        highlights: r.highlights || [],
+        years_of_experience: r.years_of_experience || null,
+        education_level: r.education_level || null,
+        skills: r.skills || [],
+        current_position_company_name: r.current_position_company_name || null,
       }));
 
       // Build evidence from team data
@@ -294,6 +361,174 @@ export class SpecterClient {
     }
   }
 
+  // ── Get company by ID ──────────────────────────────────────────────
+  /**
+   * GET /companies/{companyId}
+   * Returns full company record by Specter ID.
+   */
+  static async getCompanyById(companyId: string): Promise<{ profile: CompanyProfile | null; evidence: Evidence[] }> {
+    if (!this.getKey()) return { profile: null, evidence: [] };
+    try {
+      console.log(`[Specter] Get company by ID: ${companyId}`);
+      const raw = await this.apiFetch(`${this.API_BASE}/companies/${companyId}`);
+      const domain = raw.domain || raw.website?.domain || '';
+      const profile = this.normalizeProfile(raw, domain);
+      const evidence = this.profileToEvidence(profile);
+      return { profile, evidence };
+    } catch (err: any) {
+      console.warn(`[Specter] Get company by ID failed: ${err.message}`);
+      return { profile: null, evidence: [] };
+    }
+  }
+
+  // ── Entities / Text-Search ──────────────────────────────────────────
+  /**
+   * POST /entities/text-search
+   * Extract company/investor entities from unstructured text.
+   */
+  static async textSearch(text: string): Promise<{ entities: SpecterEntity[]; evidence: Evidence[] }> {
+    if (!this.getKey()) return { entities: [], evidence: [] };
+    try {
+      console.log(`[Specter] Text-search entities: "${text.slice(0, 60)}…"`);
+      const data = await this.apiFetch(`${this.API_BASE}/entities/text-search`, {
+        method: 'POST',
+        body: JSON.stringify({ text: text.slice(0, 1000) }),
+      });
+      const entities: SpecterEntity[] = (Array.isArray(data) ? data : []).map((e: any) => ({
+        source_name: e.source_name || '',
+        context: e.context || 'passive',
+        entity_id: e.entity_id || '',
+        entity_type: e.entity_type || 'company',
+      }));
+      const evidence: Evidence[] = entities.map((e, i) => ({
+        evidence_id: `specter-entity-${i}`,
+        title: `Entity: ${e.source_name} (${e.entity_type})`,
+        snippet: `${e.source_name} — Type: ${e.entity_type} | Context: ${e.context} | ID: ${e.entity_id}`,
+        source: 'specter-entities',
+        retrieved_at: new Date().toISOString(),
+      }));
+      console.log(`[Specter] Found ${entities.length} entities`);
+      return { entities, evidence };
+    } catch (err: any) {
+      console.warn(`[Specter] Text-search failed: ${err.message}`);
+      return { entities: [], evidence: [] };
+    }
+  }
+
+  // ── Enrich person by LinkedIn ───────────────────────────────────────
+  /**
+   * POST /people
+   * Enrich a person by LinkedIn URL/ID. Returns full profile with profile_picture_url.
+   */
+  static async enrichPerson(identifier: { linkedin_url?: string; linkedin_id?: string }): Promise<{ person: SpecterPerson | null; evidence: Evidence[] }> {
+    if (!this.getKey()) return { person: null, evidence: [] };
+    try {
+      console.log(`[Specter] Enrich person: ${identifier.linkedin_url || identifier.linkedin_id}`);
+      const data = await this.apiFetch(`${this.API_BASE}/people`, {
+        method: 'POST',
+        body: JSON.stringify(identifier),
+      });
+      if (!data || (!data.person_id && !data.full_name)) {
+        return { person: null, evidence: [] };
+      }
+      const person: SpecterPerson = {
+        specter_person_id: data.person_id || '',
+        full_name: data.full_name || `${data.first_name || ''} ${data.last_name || ''}`.trim(),
+        title: data.current_position_title || '',
+        departments: [],
+        seniority: data.level_of_seniority || '',
+        linkedin_url: data.linkedin_url,
+        profile_picture_url: data.profile_picture_url || null,
+        about: data.about || null,
+        tagline: data.tagline || null,
+        location: data.location || null,
+        highlights: data.highlights || [],
+        years_of_experience: data.years_of_experience || null,
+        education_level: data.education_level || null,
+        skills: (data.skills || []).slice(0, 15),
+        current_position_company_name: data.current_position_company_name || null,
+      };
+      const evidence: Evidence[] = [{
+        evidence_id: `specter-person-enriched-${person.specter_person_id}`,
+        title: `${person.full_name} — Enriched Profile`,
+        snippet: `${person.full_name} | ${person.title} at ${person.current_position_company_name || '?'} | ${person.seniority} | ${person.years_of_experience || '?'} yrs exp | Skills: ${person.skills?.slice(0, 5).join(', ') || '?'} | ${person.highlights?.join(', ') || ''}`,
+        source: 'specter-people',
+        retrieved_at: new Date().toISOString(),
+      }];
+      return { person, evidence };
+    } catch (err: any) {
+      console.warn(`[Specter] Enrich person failed: ${err.message}`);
+      return { person: null, evidence: [] };
+    }
+  }
+
+  // ── Get person by ID ────────────────────────────────────────────────
+  /**
+   * GET /people/{personId}
+   * Returns full person profile by Specter person ID.
+   */
+  static async getPersonById(personId: string): Promise<{ person: SpecterPerson | null; evidence: Evidence[] }> {
+    if (!this.getKey()) return { person: null, evidence: [] };
+    try {
+      console.log(`[Specter] Get person by ID: ${personId}`);
+      const data = await this.apiFetch(`${this.API_BASE}/people/${personId}`);
+      if (!data) return { person: null, evidence: [] };
+      const person: SpecterPerson = {
+        specter_person_id: data.person_id || personId,
+        full_name: data.full_name || `${data.first_name || ''} ${data.last_name || ''}`.trim(),
+        title: data.current_position_title || '',
+        departments: [],
+        seniority: data.level_of_seniority || '',
+        linkedin_url: data.linkedin_url,
+        profile_picture_url: data.profile_picture_url || null,
+        about: data.about || null,
+        tagline: data.tagline || null,
+        location: data.location || null,
+        highlights: data.highlights || [],
+        years_of_experience: data.years_of_experience || null,
+        education_level: data.education_level || null,
+        skills: (data.skills || []).slice(0, 15),
+        current_position_company_name: data.current_position_company_name || null,
+      };
+      const evidence: Evidence[] = [{
+        evidence_id: `specter-person-${personId}`,
+        title: `${person.full_name} — Full Profile`,
+        snippet: `${person.full_name} | ${person.title} at ${person.current_position_company_name || '?'} | ${person.location || '?'} | ${person.years_of_experience || '?'} yrs | Education: ${person.education_level || '?'} | Skills: ${person.skills?.slice(0, 8).join(', ') || '?'}`,
+        source: 'specter-people',
+        retrieved_at: new Date().toISOString(),
+      }];
+      return { person, evidence };
+    } catch (err: any) {
+      console.warn(`[Specter] Get person by ID failed: ${err.message}`);
+      return { person: null, evidence: [] };
+    }
+  }
+
+  // ── Get person email ────────────────────────────────────────────────
+  /**
+   * GET /people/{personId}/email
+   * Returns verified professional/personal email.
+   */
+  static async getPersonEmail(personId: string, type: 'professional' | 'personal' = 'professional'): Promise<{ email: string | null; evidence: Evidence[] }> {
+    if (!this.getKey()) return { email: null, evidence: [] };
+    try {
+      console.log(`[Specter] Get email for person: ${personId}`);
+      const data = await this.apiFetch(`${this.API_BASE}/people/${personId}/email?type=${type}`);
+      const email = data?.email || data?.address || null;
+      const evidence: Evidence[] = email ? [{
+        evidence_id: `specter-email-${personId}`,
+        title: `Verified email for ${personId}`,
+        snippet: `Email: ${email} (${type})`,
+        source: 'specter-email',
+        retrieved_at: new Date().toISOString(),
+      }] : [];
+      return { email, evidence };
+    } catch (err: any) {
+      console.warn(`[Specter] Get person email failed: ${err.message}`);
+      return { email: null, evidence: [] };
+    }
+  }
+
   private static normalizeProfile(raw: any, domain: string): CompanyProfile {
     return {
       specter_id: raw.id || raw._id || '',
@@ -332,6 +567,7 @@ export class SpecterClient {
       traction_metrics: raw.traction_metrics || null,
       hq_city: raw.hq?.city ?? null,
       hq_country: raw.hq?.country ?? null,
+      logo_url: raw.logo_url || raw.logo || null,
     };
   }
 

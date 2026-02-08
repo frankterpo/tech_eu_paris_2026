@@ -42,6 +42,12 @@ export function reduceState(state: DealState, event: DealEvent): DealState {
       }
       break;
 
+    case 'TRIGGER_SUGGESTIONS_READY':
+      if (event.payload.suggestions && Array.isArray(event.payload.suggestions)) {
+        newState.trigger_suggestions = event.payload.suggestions;
+      }
+      break;
+
     // NODE_STARTED, MSG_SENT, NODE_DONE, ERROR — logged but don't mutate canonical state
     default:
       break;

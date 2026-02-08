@@ -10,7 +10,7 @@ kind: app
 model_config:
   agent_mode:
     enabled: true
-    max_iteration: 10
+    max_iteration: 15
     strategy: function_call
     tools:
     - enabled: true
@@ -63,6 +63,206 @@ model_config:
       tool_name: specterSearchName
       tool_parameters:
         query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Company By ID
+      tool_name: specterCompanyById
+      tool_parameters:
+        company_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Enrich Person
+      tool_name: specterEnrichPerson
+      tool_parameters:
+        linkedin_url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Text Search
+      tool_name: specterTextSearch
+      tool_parameters:
+        text: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Query
+      tool_name: calaQuery
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Search Entities
+      tool_name: calaSearchEntities
+      tool_parameters:
+        name: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Tavily Web Search
+      tool_name: tavilyWebSearch
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Tavily Extract
+      tool_name: tavilyExtract
+      tool_parameters:
+        urls: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Get Entity
+      tool_name: calaGetEntity
+      tool_parameters:
+        entity_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Person By ID
+      tool_name: specterPersonById
+      tool_parameters:
+        person_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Specter Person Email
+      tool_name: specterPersonEmail
+      tool_parameters:
+        person_id: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: '[SLOW] Tavily Crawl'
+      tool_name: tavilyCrawl
+      tool_parameters:
+        url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: '[VERY SLOW] Tavily Research'
+      tool_name: tavilyResearch
+      tool_parameters:
+        input: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Tavily Research Status
+      tool_name: tavilyResearchStatus
+      tool_parameters: {}
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: 'Web Extract (legacy)'
+      tool_name: webExtract
+      tool_parameters:
+        url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Dify Agent (FunctionCalling)
+      tool_name: difyAgentFC
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Dify Agent (ReAct)
+      tool_name: difyAgentReAct
+      tool_parameters:
+        query: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: '[SLOW] Lightpanda Scrape'
+      tool_name: lightpandaScrape
+      tool_parameters:
+        url: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Create Trigger
+      tool_name: calaCreateTrigger
+      tool_parameters:
+        query: ''
+        email: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala Subscribe Trigger
+      tool_name: calaSubscribeTrigger
+      tool_parameters:
+        trigger_id: ''
+        email: ''
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: dealbot_tools
+      provider_name: dealbot_tools
+      provider_type: api
+      tool_label: Cala List Triggers
+      tool_name: calaListTriggers
+      tool_parameters: {}
   annotation_reply:
     enabled: false
   chat_prompt_config: {}
@@ -101,31 +301,62 @@ model_config:
 
     ## YOUR TOOLS — FACT-CHECK AGGRESSIVELY BEFORE SCORING
 
-    You have 6 research tools. Use them ALL to convert ASSUMPTIONS into EVIDENCE. The more evidence, the stronger the decision:
+    You have 26 research tools. Use them ALL to convert ASSUMPTIONS into EVIDENCE. The more evidence, the stronger the decision:
 
-    1. **Cala Search** — Search for evidence to validate or challenge hypotheses. Run AT LEAST 2 queries:
-       - Stress-test the bull case: search for risks, challenges, criticism
-       - Verify market/regulatory claims: search for barriers, compliance issues
+    ### PRIMARY TOOLS (Cala + Specter — use FIRST to fact-check)
 
-    2. **Specter Enrich** — Enrich companies by domain for hard data (funding, headcount, traction).
+    1. **Cala Search** (`calaSearch`) — Search for evidence to validate or challenge hypotheses. Run AT LEAST 2 queries. Chain entity names from responses.
+    2. **Cala Query** (`calaQuery`) — Structured data for precise numbers. Better for verifying specific claims (revenue, funding amounts).
+    3. **Cala Search Entities** (`calaSearchEntities`) — Fuzzy search for companies/people by name.
+    4. **Cala Get Entity** (`calaGetEntity`) — Get full entity details by Cala entity ID.
+    5. **Specter Enrich** (`specterEnrich`) — Hard data by domain (funding, headcount, traction).
+    6. **Specter Similar Companies** (`specterSimilarCompanies`) — AI-matched competitors. Benchmark on funding, team, growth stage. Feeds Market + Moat scores.
+    7. **Specter Company By ID** (`specterCompanyById`) — Full profiles for competitor IDs from specterSimilarCompanies. USE THIS to compare competitor metrics.
+    8. **Specter Company People** (`specterCompanyPeople`) — Verify leadership depth. Complete C-suite? Feeds Execution score.
+    9. **Specter Enrich Person** (`specterEnrichPerson`) — Full person profile by LinkedIn URL. Verify founder track records, prior exits.
+    10. **Specter Person By ID** (`specterPersonById`) — Get person profile by Specter person ID.
+    11. **Specter Person Email** (`specterPersonEmail`) — Get verified email for a person.
+    12. **Specter Search Name** (`specterSearchName`) — Look up companies by name.
+    13. **Specter Text Search** (`specterTextSearch`) — Extract entities from unstructured text.
 
-    3. **Specter Similar Companies** — Get AI-matched competitors. Benchmark the target against comparable companies on funding, team size, growth stage. Feeds Market and Moat scores.
+    ### FAST WEB TOOLS (Tavily — use AFTER Cala + Specter)
 
-    4. **Specter Company People** — Verify leadership depth. Does the company have a complete C-suite? Any red flags? Feeds Execution score.
+    14. **Tavily Web Search** (`tavilyWebSearch`) — Real-time web search (~2s). Recent news, regulatory developments, founder exits.
+    15. **Tavily Extract** (`tavilyExtract`) — Extract content from URLs (~3s).
 
-    5. **Specter Search Name** — Look up specific companies or competitors mentioned in associate hypotheses.
+    ### DEEP WEB TOOLS (slow but powerful — use when fast tools are insufficient)
 
-    6. **Tavily Web Search** — Real-time web search. Final check for recent news, founder previous exits, regulatory developments.
+    16. **Tavily Crawl** (`tavilyCrawl`) — ⚠️ SLOW (~30-60s). Full website crawl.
+    17. **Tavily Research** (`tavilyResearch`) — ⚠️ VERY SLOW (~60-120s, ASYNC). Comprehensive research report. Poll with tavilyResearchStatus.
+    18. **Tavily Research Status** (`tavilyResearchStatus`) — Poll async tavilyResearch results.
+    19. **Web Extract** (`webExtract`) — Legacy URL scraper. Prefer tavilyExtract.
+
+    ### ADVANCED / META / TRIGGER TOOLS
+
+    20. **Lightpanda Scrape** (`lightpandaScrape`) — ⚠️ SLOW. Headless browser for JS-heavy SPAs.
+    21. **Dify Agent FC** (`difyAgentFC`) — Delegate sub-task to FunctionCalling sub-agent.
+    22. **Dify Agent ReAct** (`difyAgentReAct`) — Delegate sub-task to ReAct sub-agent.
+    23-26. Cala Triggers (`calaCreateTrigger`, `calaSubscribeTrigger`, `calaListTriggers`) + `toolHealth`.
 
     IMPORTANT: Use tools BEFORE scoring the rubric. The more evidence you gather, the fewer ASSUMPTIONS in your checklist, and the stronger your decision.
 
 
+    ## SPEED GUIDELINES
+
+    - Aim for 4-8 tool calls. You already have rich evidence from analysts + associate. Be surgical.
+    - Prefer `tavilyWebSearch` (~2s) over `tavilyCrawl` (~30-60s) and `tavilyResearch` (~60-120s) for most web lookups.
+    - Only use slow tools when fast alternatives didn't give you what you need.
+    - Cala + Specter are fastest AND best for structured data — always try them first.
+    - If you already have strong evidence for a rubric dimension, score it immediately.
+    - Complete ALL tool calls in rounds 1-3, then produce output. No more than 4 rounds total.
+
+
     ## MANDATORY TOOL SEQUENCE
 
-    1. FIRST: Review associate synthesis. Identify hypotheses with weak evidence or "NO_EVIDENCE" risk flags.
-    2. THEN: Call specterCompanyPeople + specterSimilarCompanies to validate team and competitive position.
-    3. THEN: Run 2+ Cala queries to stress-test the weakest hypotheses and 1-2 Tavily searches for recent news.
-    4. FINALLY: Score the rubric and produce the Decision Gate. Every score MUST cite specific data from your tool results.
+    1. FIRST: Review associate synthesis. Identify the 2-3 weakest hypotheses (highest assumption ratio).
+    2. ROUND 1 (parallel): specterCompanyPeople + specterSimilarCompanies + 1 calaSearch (stress-test bull case)
+    3. ROUND 2 (only if gaps): 1 calaSearch (verify specific claim) + 1 tavilyWebSearch (recent news check)
+    4. ROUND 3: STOP calling tools. Score the rubric and produce the Decision Gate immediately.
 
 
     ## DEAL INPUT

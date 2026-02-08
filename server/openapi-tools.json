@@ -2,314 +2,312 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Deal Bot Tool APIs",
-    "description": "Tool endpoints for Dify Agent nodes — search knowledge via Cala and enrich companies via Specter. Keys managed server-side.",
-    "version": "1.0.0"
+    "description": "Full tool endpoints for Dify Agent nodes. Cala (knowledge search + entity DB), Specter (company + people enrichment + signals), Tavily (web search), Web scraping. All API keys managed server-side.",
+    "version": "2.0.0"
   },
   "servers": [
     {
-      "url": "https://5a341605806e28.lhr.life/api/tools",
-      "description": "Local development"
+      "url": "https://lillie-nonperceptive-splendidly.ngrok-free.dev/api/tools",
+      "description": "Local development (update ngrok URL)"
     }
   ],
   "paths": {
     "/cala/search": {
       "post": {
         "operationId": "calaSearch",
-        "summary": "Search knowledge base for evidence",
-        "description": "Search Cala's knowledge base for evidence relevant to a VC deal analysis query. Returns normalized evidence items with IDs that can be cited in analysis. Use specific, targeted queries — e.g., 'competitors of Specter in competitive intelligence platforms' or 'TAM for private markets data infrastructure 2024'.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                  "query": {
-                    "type": "string",
-                    "description": "Search query — be specific to your analyst specialization. E.g., 'market size competitive intelligence SaaS', 'Specter competitors private markets data', 'B2B SaaS traction benchmarks Series A'"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Search results with citable evidence items",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "evidence": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "evidence_id": { "type": "string", "description": "Unique ID — use this in evidence_ids citations" },
-                          "title": { "type": "string" },
-                          "snippet": { "type": "string", "description": "Content excerpt — the actual evidence text" },
-                          "source": { "type": "string" },
-                          "url": { "type": "string" },
-                          "retrieved_at": { "type": "string" }
-                        }
-                      }
-                    },
-                    "count": { "type": "integer" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "summary": "Search Cala knowledge base (full response)",
+        "description": "Search Cala's verified knowledge base. Returns: 1) content — an AI-generated answer summarizing the knowledge, 2) evidence — citable KnowBit items with sources, 3) entities — named entities extracted (PERSON, ORG, GPE, LOC, PRODUCT) with IDs. CRITICAL: Use the entities from each response to CHAIN follow-up queries. Example flow: search 'Mistral AI funding' → entities include 'Arthur Mensch' (PERSON) + 'Lightspeed' (ORG) → search 'Arthur Mensch founder CEO background' → search 'Lightspeed Venture Partners AI investments'. This builds a comprehensive profile across multiple angles.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": { "query": { "type": "string", "description": "Search query — be specific. Chain entity names from previous searches to build deeper profiles. E.g., after finding founder 'Arthur Mensch', search 'Arthur Mensch AI career track record'" } } } } } },
+        "responses": { "200": { "description": "AI answer + evidence + entities", "content": { "application/json": { "schema": { "type": "object", "properties": { "content": { "type": "string", "description": "AI-generated answer summarizing the knowledge — read this FIRST" }, "evidence": { "type": "array", "items": { "type": "object", "properties": { "evidence_id": { "type": "string" }, "title": { "type": "string" }, "snippet": { "type": "string" }, "source": { "type": "string" }, "url": { "type": "string" } } } }, "entities": { "type": "array", "description": "Named entities extracted — use these names for deeper follow-up queries", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "name": { "type": "string" }, "entity_type": { "type": "string", "enum": ["PERSON", "ORG", "GPE", "LOC", "PRODUCT", "FAC", "WORK_OF_ART", "LAW", "LANGUAGE"] } } } }, "explainability": { "type": "array", "description": "Reasoning steps Cala used to arrive at the answer", "items": { "type": "object", "properties": { "content": { "type": "string" }, "references": { "type": "array", "items": { "type": "string" } } } } }, "count": { "type": "integer" } } } } } } }
+      }
+    },
+    "/cala/query": {
+      "post": {
+        "operationId": "calaQuery",
+        "summary": "Structured query to Cala",
+        "description": "Returns structured data results + named entity extraction. Better than calaSearch for precise data points like revenue, funding amounts, employee counts. Use for: 'Mistral AI revenue 2024', 'AI market size Europe'.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": { "query": { "type": "string", "description": "Structured query for precise data extraction" } } } } } },
+        "responses": { "200": { "description": "Structured results + entities", "content": { "application/json": { "schema": { "type": "object", "properties": { "results": { "type": "array", "items": { "type": "object" } }, "entities": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "name": { "type": "string" }, "entity_type": { "type": "string" } } } }, "evidence": { "type": "array", "items": { "type": "object" } }, "count": { "type": "integer" } } } } } } }
+      }
+    },
+    "/cala/search-entities": {
+      "post": {
+        "operationId": "calaSearchEntities",
+        "summary": "Fuzzy search Cala entities by name",
+        "description": "Search Cala's entity database by name with fuzzy matching. Find companies (ORG), people (PERSON), locations (GPE), products (PRODUCT). Returns entity IDs for deeper lookup with calaGetEntity.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "description": "Entity name to search for" }, "entity_types": { "type": "string", "description": "Comma-separated entity types to filter. Options: PERSON, ORG, GPE, LOC, PRODUCT, FAC, WORK_OF_ART, LAW, LANGUAGE. E.g., 'PERSON,ORG'" } } } } } },
+        "responses": { "200": { "description": "Matching entities", "content": { "application/json": { "schema": { "type": "object", "properties": { "entities": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "name": { "type": "string" }, "entity_type": { "type": "string" } } } }, "count": { "type": "integer" } } } } } } }
+      }
+    },
+    "/cala/entity/{entity_id}": {
+      "get": {
+        "operationId": "calaGetEntity",
+        "summary": "Get Cala entity details by ID",
+        "description": "Get detailed information about a specific entity from Cala's knowledge graph. Use entity IDs from calaSearchEntities or calaQuery results.",
+        "parameters": [{ "name": "entity_id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "Cala entity ID" }],
+        "responses": { "200": { "description": "Entity details", "content": { "application/json": { "schema": { "type": "object" } } } } }
       }
     },
     "/specter/enrich": {
       "post": {
         "operationId": "specterEnrich",
-        "summary": "Enrich a company by domain",
-        "description": "Retrieve structured company profile from Specter's database by domain name. Returns detailed profile (funding, headcount, growth stage, traction metrics, founders, HQ, industries) plus normalized evidence items. Use for the target company or any competitor you discover.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["domain"],
-                "properties": {
-                  "domain": {
-                    "type": "string",
-                    "description": "Company domain to enrich — e.g., 'tryspecter.com', 'crunchbase.com'"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Company profile and evidence items",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "profile": {
-                      "type": "object",
-                      "description": "Structured company profile with all Specter data fields",
-                      "properties": {
-                        "specter_id": { "type": "string" },
-                        "name": { "type": "string" },
-                        "domain": { "type": "string" },
-                        "description": { "type": "string" },
-                        "growth_stage": { "type": "string" },
-                        "operating_status": { "type": "string" },
-                        "customer_focus": { "type": "string" },
-                        "founded_year": { "type": "integer", "nullable": true },
-                        "employee_count": { "type": "integer", "nullable": true },
-                        "employee_range": { "type": "string", "nullable": true },
-                        "industries": { "type": "array", "items": { "type": "string" } },
-                        "sub_industries": { "type": "array", "items": { "type": "string" } },
-                        "regions": { "type": "array", "items": { "type": "string" } },
-                        "highlights": { "type": "array", "items": { "type": "string" } },
-                        "founders": { "type": "array", "items": { "type": "string" } },
-                        "founder_count": { "type": "integer" },
-                        "investors": { "type": "array", "items": { "type": "string" } },
-                        "funding_total_usd": { "type": "number", "nullable": true },
-                        "funding_last_round_type": { "type": "string", "nullable": true },
-                        "web_monthly_visits": { "type": "integer", "nullable": true },
-                        "linkedin_followers": { "type": "integer", "nullable": true },
-                        "hq_city": { "type": "string", "nullable": true },
-                        "hq_country": { "type": "string", "nullable": true }
-                      }
-                    },
-                    "evidence": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "evidence_id": { "type": "string" },
-                          "title": { "type": "string" },
-                          "snippet": { "type": "string" },
-                          "source": { "type": "string" },
-                          "retrieved_at": { "type": "string" }
-                        }
-                      }
-                    },
-                    "count": { "type": "integer" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "summary": "Enrich company by domain",
+        "description": "Get full company profile from Specter by domain. Returns: funding, headcount, growth stage, traction, founders, HQ, industries, logo_url, highlights, web traffic. Use for target company and competitors.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["domain"], "properties": { "domain": { "type": "string", "description": "Company domain — e.g., 'tryspecter.com', 'mistral.ai'" } } } } } },
+        "responses": { "200": { "description": "Company profile + evidence", "content": { "application/json": { "schema": { "type": "object", "properties": { "profile": { "type": "object", "properties": { "specter_id": { "type": "string" }, "name": { "type": "string" }, "domain": { "type": "string" }, "description": { "type": "string" }, "logo_url": { "type": "string", "nullable": true }, "growth_stage": { "type": "string" }, "employee_count": { "type": "integer", "nullable": true }, "funding_total_usd": { "type": "number", "nullable": true }, "founders": { "type": "array", "items": { "type": "string" } }, "hq_city": { "type": "string", "nullable": true }, "hq_country": { "type": "string", "nullable": true } } }, "evidence": { "type": "array", "items": { "type": "object" } }, "count": { "type": "integer" } } } } } } }
+      }
+    },
+    "/specter/company-by-id": {
+      "post": {
+        "operationId": "specterCompanyById",
+        "summary": "Get company by Specter ID",
+        "description": "Fetch full company record by Specter company ID. Use when you have an ID from similar companies, entity search, or text search. Returns same profile as specterEnrich.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["company_id"], "properties": { "company_id": { "type": "string", "description": "Specter company ID" } } } } } },
+        "responses": { "200": { "description": "Company profile + evidence" } }
       }
     },
     "/specter/similar": {
       "post": {
         "operationId": "specterSimilarCompanies",
         "summary": "Find similar/competitor companies",
-        "description": "Given a Specter company ID, returns AI-matched similar companies. Use this to map the competitive landscape — find direct competitors, adjacent players, and comparable companies. The specter_id comes from the specterEnrich response. ALWAYS use this for competition analysis.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["company_id"],
-                "properties": {
-                  "company_id": {
-                    "type": "string",
-                    "description": "Specter company ID (from specterEnrich profile.specter_id or previous results)"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Similar companies with evidence",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "companies": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": { "type": "string" },
-                          "name": { "type": "string" },
-                          "domain": { "type": "string" },
-                          "tagline": { "type": "string" },
-                          "growth_stage": { "type": "string" },
-                          "employee_count": { "type": "integer", "nullable": true },
-                          "founded_year": { "type": "integer", "nullable": true },
-                          "industries": { "type": "array", "items": { "type": "string" } },
-                          "funding_total_usd": { "type": "number", "nullable": true }
-                        }
-                      }
-                    },
-                    "evidence": { "type": "array", "items": { "type": "object" } },
-                    "count": { "type": "integer" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "description": "AI-matched similar companies by Specter ID. MANDATORY for competition analysis. Returns competitors with funding, stage, industries. Then use specterEnrich on competitor domains for deep profiles.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["company_id"], "properties": { "company_id": { "type": "string", "description": "Specter company ID (from specterEnrich profile.specter_id)" } } } } } },
+        "responses": { "200": { "description": "Similar companies + evidence", "content": { "application/json": { "schema": { "type": "object", "properties": { "companies": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "domain": { "type": "string" }, "growth_stage": { "type": "string" }, "funding_total_usd": { "type": "number", "nullable": true } } } }, "count": { "type": "integer" } } } } } } }
       }
     },
     "/specter/people": {
       "post": {
         "operationId": "specterCompanyPeople",
-        "summary": "Get company team members and leadership",
-        "description": "Given a Specter company ID, returns the company's team members with titles, departments, and seniority. Use this to assess founding team quality, leadership depth, and organizational maturity. The specter_id comes from the specterEnrich response.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["company_id"],
-                "properties": {
-                  "company_id": {
-                    "type": "string",
-                    "description": "Specter company ID (from specterEnrich profile.specter_id)"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Team members and leadership evidence",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "people": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "specter_person_id": { "type": "string" },
-                          "full_name": { "type": "string" },
-                          "title": { "type": "string" },
-                          "departments": { "type": "array", "items": { "type": "string" } },
-                          "seniority": { "type": "string" },
-                          "linkedin_url": { "type": "string", "nullable": true }
-                        }
-                      }
-                    },
-                    "evidence": { "type": "array", "items": { "type": "object" } },
-                    "count": { "type": "integer" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "summary": "Get company team & leadership",
+        "description": "Get team members for a company by Specter ID. Returns founders, C-suite, VPs, directors with titles, departments, seniority, LinkedIn URLs, and profile_picture_url. MANDATORY for execution/team assessment.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["company_id"], "properties": { "company_id": { "type": "string", "description": "Specter company ID" } } } } } },
+        "responses": { "200": { "description": "Team members + evidence", "content": { "application/json": { "schema": { "type": "object", "properties": { "people": { "type": "array", "items": { "type": "object", "properties": { "specter_person_id": { "type": "string" }, "full_name": { "type": "string" }, "title": { "type": "string" }, "seniority": { "type": "string" }, "linkedin_url": { "type": "string", "nullable": true }, "profile_picture_url": { "type": "string", "nullable": true } } } }, "count": { "type": "integer" } } } } } } }
       }
     },
     "/specter/search-name": {
       "post": {
         "operationId": "specterSearchName",
         "summary": "Search companies by name",
-        "description": "Search Specter's database for companies by name. Use this to find specific competitors, investors, or companies mentioned in evidence. Returns basic company info with Specter IDs that can be used with specterSimilarCompanies and specterCompanyPeople.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                  "query": {
-                    "type": "string",
-                    "description": "Company name to search — e.g., 'Crunchbase', 'PitchBook', 'Dealroom'"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Search results",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "results": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": { "type": "string" },
-                          "name": { "type": "string" },
-                          "domain": { "type": "string" },
-                          "tagline": { "type": "string" },
-                          "hq_city": { "type": "string" },
-                          "hq_country": { "type": "string" },
-                          "founded_year": { "type": "integer", "nullable": true }
-                        }
-                      }
-                    },
-                    "evidence": { "type": "array", "items": { "type": "object" } },
-                    "count": { "type": "integer" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "description": "Search Specter's database by company name. Use when you know a competitor name but not the domain. Returns IDs for use with specterSimilarCompanies, specterCompanyPeople.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": { "query": { "type": "string", "description": "Company name — e.g., 'Crunchbase', 'PitchBook'" } } } } } },
+        "responses": { "200": { "description": "Search results" } }
+      }
+    },
+    "/specter/text-search": {
+      "post": {
+        "operationId": "specterTextSearch",
+        "summary": "Extract entities from text",
+        "description": "Turn unstructured text (press releases, bios, news articles) into structured company/investor entity references. Max 1000 chars. Returns entity IDs that can be enriched with specterEnrich or specterCompanyById.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string", "maxLength": 1000, "description": "Unstructured text to extract entities from" } } } } } },
+        "responses": { "200": { "description": "Matched entities", "content": { "application/json": { "schema": { "type": "object", "properties": { "entities": { "type": "array", "items": { "type": "object", "properties": { "source_name": { "type": "string" }, "context": { "type": "string", "enum": ["primary", "active", "passive"] }, "entity_id": { "type": "string" }, "entity_type": { "type": "string", "enum": ["company", "investor"] } } } }, "count": { "type": "integer" } } } } } } }
+      }
+    },
+    "/specter/enrich-person": {
+      "post": {
+        "operationId": "specterEnrichPerson",
+        "summary": "Enrich person by LinkedIn",
+        "description": "Get full professional profile by LinkedIn URL or ID. Returns: profile_picture_url, career history, skills, education, highlights (prior_exit, serial_founder, etc.). Use for founder diligence.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "linkedin_url": { "type": "string", "description": "LinkedIn profile URL" }, "linkedin_id": { "type": "string", "description": "LinkedIn slug ID" } } } } } },
+        "responses": { "200": { "description": "Person profile + evidence", "content": { "application/json": { "schema": { "type": "object", "properties": { "person": { "type": "object", "properties": { "specter_person_id": { "type": "string" }, "full_name": { "type": "string" }, "title": { "type": "string" }, "profile_picture_url": { "type": "string", "nullable": true }, "about": { "type": "string", "nullable": true }, "tagline": { "type": "string", "nullable": true }, "location": { "type": "string", "nullable": true }, "highlights": { "type": "array", "items": { "type": "string" } }, "years_of_experience": { "type": "number", "nullable": true }, "skills": { "type": "array", "items": { "type": "string" } } } }, "evidence": { "type": "array", "items": { "type": "object" } } } } } } } }
+      }
+    },
+    "/specter/person-by-id": {
+      "post": {
+        "operationId": "specterPersonById",
+        "summary": "Get person by Specter ID",
+        "description": "Full person profile by Specter person ID. Returns career, skills, education, profile_picture_url. Use person IDs from specterCompanyPeople results.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["person_id"], "properties": { "person_id": { "type": "string", "description": "Specter person ID" } } } } } },
+        "responses": { "200": { "description": "Person profile + evidence" } }
+      }
+    },
+    "/specter/person-email": {
+      "post": {
+        "operationId": "specterPersonEmail",
+        "summary": "Get verified email for person",
+        "description": "Retrieve professional or personal email for a person by their Specter person ID. Uses waterfall across data providers for best match.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["person_id"], "properties": { "person_id": { "type": "string", "description": "Specter person ID" }, "type": { "type": "string", "enum": ["professional", "personal"], "description": "Email type (default: professional)" } } } } } },
+        "responses": { "200": { "description": "Verified email" } }
+      }
+    },
+    "/tavily/search": {
+      "post": {
+        "operationId": "tavilyWebSearch",
+        "summary": "Real-time web search via Tavily",
+        "description": "Tavily's powerful web search API optimized for LLM agents. Returns ranked results with source URLs and an AI-generated answer. Use for: current news, recent funding rounds, product launches, market reports not in Cala. Supports topic filtering (general/news/finance), time ranges, domain include/exclude, and image search.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": {
+          "query": { "type": "string", "description": "Search query — be specific. E.g., 'Mistral AI latest funding round 2025', 'AI regulation EU 2025'" },
+          "search_depth": { "type": "string", "enum": ["basic", "advanced", "fast", "ultra-fast"], "description": "Controls latency vs relevance. 'advanced' = highest relevance, 'basic' = balanced, 'fast' = lower latency, 'ultra-fast' = minimum latency. Default: basic" },
+          "max_results": { "type": "integer", "minimum": 1, "maximum": 20, "description": "Max search results to return (default: 5)" },
+          "topic": { "type": "string", "enum": ["general", "news", "finance"], "description": "Search category. 'news' for real-time updates (politics, sports, events). 'finance' for financial data. Default: general" },
+          "time_range": { "type": "string", "enum": ["day", "week", "month", "year"], "description": "Filter results by recency. E.g., 'week' for last 7 days of results" },
+          "include_images": { "type": "boolean", "description": "Also perform image search and include results (default: false)" },
+          "include_domains": { "type": "string", "description": "Comma-separated domains to include. E.g., 'techcrunch.com,reuters.com'" },
+          "exclude_domains": { "type": "string", "description": "Comma-separated domains to exclude." }
+        } } } } },
+        "responses": { "200": { "description": "Ranked search results + AI answer + images", "content": { "application/json": { "schema": { "type": "object", "properties": {
+          "evidence": { "type": "array", "items": { "type": "object", "properties": { "evidence_id": { "type": "string" }, "title": { "type": "string" }, "snippet": { "type": "string" }, "url": { "type": "string" } } } },
+          "answer": { "type": "string", "nullable": true, "description": "AI-generated answer to the query" },
+          "images": { "type": "array", "nullable": true, "items": { "type": "object", "properties": { "url": { "type": "string" }, "description": { "type": "string" } } } },
+          "count": { "type": "integer" }
+        } } } } } }
+      }
+    },
+    "/tavily/extract": {
+      "post": {
+        "operationId": "tavilyExtract",
+        "summary": "Extract content from URLs (Tavily Extract)",
+        "description": "Extract and parse web page content from one or more URLs. Optimized for LLMs — returns clean markdown/text. Use when evidence contains links that need deeper analysis, or to scrape competitor websites, press releases, blog posts, regulatory docs. Supports advanced extraction for tables and embedded content.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["urls"], "properties": {
+          "urls": { "type": "string", "description": "URL to extract content from. For multiple URLs, separate with commas. Max 20." },
+          "extract_depth": { "type": "string", "enum": ["basic", "advanced"], "description": "'advanced' retrieves tables and embedded content but higher latency. Default: basic" },
+          "format": { "type": "string", "enum": ["markdown", "text"], "description": "Output format. 'markdown' (default) or 'text' (plain text)" }
+        } } } } },
+        "responses": { "200": { "description": "Extracted content per URL + evidence", "content": { "application/json": { "schema": { "type": "object", "properties": {
+          "results": { "type": "array", "items": { "type": "object", "properties": { "url": { "type": "string" }, "content": { "type": "string", "description": "Extracted page content in markdown/text" }, "images": { "type": "array", "items": { "type": "string" } } } } },
+          "failed_urls": { "type": "array", "items": { "type": "string" }, "description": "URLs that failed extraction" },
+          "evidence": { "type": "array", "items": { "type": "object" } },
+          "count": { "type": "integer" }
+        } } } } } }
+      }
+    },
+    "/tavily/crawl": {
+      "post": {
+        "operationId": "tavilyCrawl",
+        "summary": "[SLOW ~30-60s] Crawl a website",
+        "description": "WARNING: This is a SLOW operation (30-60s). Prefer tavilyWebSearch for quick lookups. Only use when you need to map an entire website structure. Graph-based website traversal with built-in extraction.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["url"], "properties": {
+          "url": { "type": "string", "description": "Root URL to crawl" },
+          "instructions": { "type": "string", "description": "Natural language instructions for the crawler" },
+          "max_depth": { "type": "integer", "minimum": 1, "maximum": 5, "description": "How far to explore (default: 1)" },
+          "limit": { "type": "integer", "minimum": 1, "description": "Total pages to process (default: 10)" },
+          "select_paths": { "type": "string", "description": "Comma-separated regex patterns for paths to include" },
+          "exclude_paths": { "type": "string", "description": "Comma-separated regex patterns for paths to exclude" }
+        } } } } },
+        "responses": { "200": { "description": "Crawled pages + evidence" } }
+      }
+    },
+    "/tavily/research": {
+      "post": {
+        "operationId": "tavilyResearch",
+        "summary": "[VERY SLOW ~60-120s, ASYNC] Comprehensive research",
+        "description": "WARNING: This is VERY SLOW (60-120s) and ASYNC. Returns a request_id you must poll. Prefer tavilyWebSearch for quick searches. Only use for deep-dive research tasks that justify the wait time. Initiates a comprehensive multi-search research report.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["input"], "properties": {
+          "input": { "type": "string", "description": "Research task" },
+          "model": { "type": "string", "enum": ["mini", "pro", "auto"], "description": "'mini' = targeted, 'pro' = comprehensive. Default: auto" }
+        } } } } },
+        "responses": { "201": { "description": "Research task queued — poll /tavily/research/{requestId} for results" } }
+      }
+    },
+    "/tavily/research/{request_id}": {
+      "get": {
+        "operationId": "tavilyResearchStatus",
+        "summary": "Poll for async research results",
+        "description": "Poll for results of a tavilyResearch task. Returns status and, when complete, the full research report.",
+        "parameters": [{ "name": "request_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Research status + report" } }
+      }
+    },
+    "/web/extract": {
+      "post": {
+        "operationId": "webExtract",
+        "summary": "Scrape URL (legacy — prefer tavilyExtract)",
+        "description": "Legacy endpoint. Prefer tavilyExtract which is faster and supports multiple URLs.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Extracted content" } }
+      }
+    },
+    "/dify/agent-fc": {
+      "post": {
+        "operationId": "difyAgentFC",
+        "summary": "[META] Run sub-task with FunctionCalling agent",
+        "description": "Delegate a sub-task to a Dify Agent using FunctionCalling strategy. The agent iteratively calls tools to fulfill the query. Returns agent answer text, parsed JSON, and tool call count.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": {
+          "query": { "type": "string" },
+          "instruction": { "type": "string" },
+          "context": { "type": "string" },
+          "max_iterations": { "type": "integer", "minimum": 1, "maximum": 25 }
+        } } } } },
+        "responses": { "200": { "description": "Agent answer + metadata" } }
+      }
+    },
+    "/dify/agent-react": {
+      "post": {
+        "operationId": "difyAgentReAct",
+        "summary": "[META] Run sub-task with ReAct agent",
+        "description": "Delegate a sub-task to a Dify Agent using ReAct (Reasoning + Acting) strategy. The agent reasons step-by-step before each tool call. Returns agent answer with reasoning trace.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": {
+          "query": { "type": "string" },
+          "instruction": { "type": "string" },
+          "context": { "type": "string" },
+          "max_iterations": { "type": "integer", "minimum": 1, "maximum": 25 }
+        } } } } },
+        "responses": { "200": { "description": "Agent answer with reasoning trace" } }
+      }
+    },
+    "/lightpanda/scrape": {
+      "post": {
+        "operationId": "lightpandaScrape",
+        "summary": "[SLOW ~10-30s] Headless browser scrape",
+        "description": "WARNING: Slower than tavilyExtract (~10-30s). Only use for JS-heavy SPAs that regular fetch cannot render. Uses Lightpanda cloud headless browser.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" }, "wait_selector": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Extracted content" } }
+      }
+    },
+    "/cala/trigger": {
+      "post": {
+        "operationId": "calaCreateTrigger",
+        "summary": "Create Cala trigger (auto-fetches baseline)",
+        "description": "Create a monitoring trigger on Cala's knowledge base via /beta/triggers API. Automatically calls knowledge/search to get the current baseline answer. When Cala detects a meaningful change in the answer, it fires the configured notifications (email/webhook). Uses X-API-KEY auth.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": {
+          "name": { "type": "string", "description": "Human-readable trigger name" },
+          "query": { "type": "string", "description": "What to monitor — e.g., 'Mistral AI key revenue updates'" },
+          "email": { "type": "string", "description": "Email for alerts" },
+          "webhook_url": { "type": "string", "description": "Webhook URL for alerts (alternative to email)" }
+        } } } } },
+        "responses": { "201": { "description": "Trigger created", "content": { "application/json": { "schema": { "type": "object", "properties": {
+          "trigger": { "type": "object", "nullable": true, "description": "CalaTrigger with id, name, query, answer, status, notifications" },
+          "source": { "type": "string" }
+        } } } } } }
+      }
+    },
+    "/cala/trigger/subscribe": {
+      "post": {
+        "operationId": "calaSubscribeTrigger",
+        "summary": "Add email notification to trigger",
+        "description": "Add an email notification to an existing Cala trigger.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["trigger_id", "email"], "properties": { "trigger_id": { "type": "string", "format": "uuid" }, "email": { "type": "string", "format": "email" } } } } } },
+        "responses": { "200": { "description": "Subscription result" } }
+      }
+    },
+    "/cala/trigger/{trigger_id}/status": {
+      "patch": {
+        "operationId": "calaTriggerStatus",
+        "summary": "Pause or resume a trigger",
+        "description": "Update a Cala trigger's status to 'active' or 'paused'.",
+        "parameters": [{ "name": "trigger_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "type": "string", "enum": ["active", "paused"] } } } } } },
+        "responses": { "200": { "description": "Updated trigger" } }
+      }
+    },
+    "/cala/trigger/{trigger_id}/notification": {
+      "post": {
+        "operationId": "calaAddNotification",
+        "summary": "Add notification to trigger",
+        "description": "Add an email or webhook notification to an existing trigger.",
+        "parameters": [{ "name": "trigger_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["type", "target"], "properties": {
+          "type": { "type": "string", "enum": ["email", "webhook"] },
+          "target": { "type": "string", "description": "Email address or webhook URL" }
+        } } } } },
+        "responses": { "201": { "description": "Notification added" } }
+      }
+    },
+    "/cala/triggers": {
+      "get": {
+        "operationId": "calaListTriggers",
+        "summary": "List all Cala triggers",
+        "description": "List all triggers on Cala's knowledge base with their status, notifications, and last checked time.",
+        "responses": { "200": { "description": "Trigger list", "content": { "application/json": { "schema": { "type": "object", "properties": { "triggers": { "type": "array", "items": { "type": "object" } }, "count": { "type": "integer" } } } } } } }
       }
     },
     "/health": {
@@ -317,23 +315,7 @@
         "operationId": "toolHealth",
         "summary": "Check tool API health",
         "description": "Returns availability status of each tool backend.",
-        "responses": {
-          "200": {
-            "description": "Health status",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "cala": { "type": "boolean" },
-                    "specter": { "type": "boolean" },
-                    "status": { "type": "string" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "responses": { "200": { "description": "Health status" } }
       }
     }
   }

@@ -10,8 +10,8 @@ const AGENT_KEY_MAP: Record<DifyAgentName, string> = {
 };
 
 export class DifyClient {
-  // Agent mode: tool calls take longer, so 120s timeout
-  private static readonly TIMEOUT_MS = 120_000;
+  // Agent mode: tool calls take longer (5+ tools × 30s each), so 300s timeout
+  private static readonly TIMEOUT_MS = 300_000;
 
   private static get API_BASE() {
     return process.env.DIFY_BASE_URL || 'https://api.dify.ai/v1';
@@ -53,8 +53,13 @@ export class DifyClient {
    * Read a Dify streaming SSE response and accumulate the full answer text.
    * Agent-chat streams events: agent_thought, agent_message, message_end, error.
    * We accumulate `answer` chunks from `agent_message` events.
+   * Optional onToolCall fires on each agent_thought with tool names + thinking + tool input.
    */
-  private static async readSSEAnswer(response: Response, agent: string): Promise<string> {
+  private static async readSSEAnswer(
+    response: Response,
+    agent: string,
+    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => void,
+  ): Promise<string> {
     const body = response.body;
     if (!body) throw new Error(`Dify agent "${agent}" returned no response body`);
 
@@ -90,10 +95,17 @@ export class DifyClient {
               // Accumulate answer text chunks
               answer += event.answer || '';
             } else if (eventType === 'agent_thought') {
-              // Log tool calls for debugging
+              // Log tool calls for debugging + fire callback
               if (event.tool) {
                 toolCalls++;
+                const toolNames = event.tool.split(';').filter(Boolean);
                 console.log(`[Dify] Agent "${agent}" tool call #${toolCalls}: ${event.tool}`);
+                if (onToolCall) {
+                  onToolCall({ toolNames, callNumber: toolCalls, thought: event.thought || undefined, toolInput: event.tool_input || undefined });
+                }
+              } else if (event.thought && onToolCall) {
+                // Pure thinking (no tool call) — still emit for narration
+                onToolCall({ toolNames: [], callNumber: toolCalls, thought: event.thought });
               }
             } else if (eventType === 'message_end') {
               // Stream complete
@@ -125,7 +137,8 @@ export class DifyClient {
   static async runAgent<T>(
     agent: DifyAgentName,
     inputs: Record<string, string>,
-    query?: string
+    query?: string,
+    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => void,
   ): Promise<T> {
     const apiKey = this.getKeyForAgent(agent);
 
@@ -163,7 +176,7 @@ export class DifyClient {
       }
 
       // Read the SSE stream and accumulate the full answer
-      const answer = await this.readSSEAnswer(response, agent);
+      const answer = await this.readSSEAnswer(response, agent, onToolCall);
       clearTimeout(timeout);
 
       if (!answer) {
@@ -232,6 +245,81 @@ export class DifyClient {
       clearTimeout(timeout);
       console.warn(`[Dify] Completion failed: ${e.message}`);
       return '';
+    }
+  }
+
+  // ── Generic agent call (FunctionCalling / ReAct sub-agents) ──────────
+  /**
+   * Call any Dify agent-chat app by explicit API key.
+   * Used for FunctionCalling and ReAct strategy sub-agents.
+   *
+   * @param apiKey       – Dify app API key
+   * @param instruction  – system instruction for the agent
+   * @param query        – the user query / task
+   * @param context      – optional context string injected as input variable
+   * @param maxIterations – hint for the agent (passed as input variable)
+   * @param label        – display label for logging
+   */
+  static async runCustomAgent(
+    apiKey: string,
+    opts: {
+      instruction: string;
+      query: string;
+      context?: string;
+      maxIterations?: number;
+      label?: string;
+    },
+    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => void,
+  ): Promise<{ answer: string; parsed: unknown | null; toolCalls: number }> {
+    const label = opts.label || 'custom';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
+
+    try {
+      console.log(`[Dify] Custom agent "${label}" — query: "${opts.query.slice(0, 80)}…"`);
+
+      const response = await fetch(`${this.API_BASE}/chat-messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          inputs: {
+            query: opts.query,
+            instruction: opts.instruction || '',
+            context: opts.context || '',
+            max_iterations: String(opts.maxIterations || 5),
+          },
+          query: opts.query,
+          response_mode: 'streaming',
+          user: `agent-${label}`,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        clearTimeout(timeout);
+        const errText = await response.text();
+        throw new Error(`Dify API error (${label}): ${response.status} – ${errText.slice(0, 300)}`);
+      }
+
+      let toolCallCount = 0;
+      const answer = await this.readSSEAnswer(response, label, (info) => {
+        toolCallCount = info.callNumber;
+        if (onToolCall) onToolCall(info);
+      });
+      clearTimeout(timeout);
+
+      const parsed = this.extractJSON(answer);
+      console.log(`[Dify] Custom agent "${label}" done — ${answer.length} chars, ${toolCallCount} tool calls, JSON: ${parsed !== null}`);
+
+      return { answer, parsed, toolCalls: toolCallCount };
+    } catch (error: any) {
+      clearTimeout(timeout);
+      const reason = error.name === 'AbortError' ? `timeout (${this.TIMEOUT_MS}ms)` : error.message;
+      console.error(`[Dify] Custom agent "${label}" error: ${reason}`);
+      throw new Error(`Dify custom agent "${label}" failed: ${reason}`);
     }
   }
 
