@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import "@/index.css";
 import { mountWidget, useSendFollowUpMessage } from "skybridge/web";
-import { useToolInfo } from "../helpers.js";
+import { useToolInfo, useCallTool } from "../helpers.js";
 
 /* ── Types & helpers ──────────────────────────────────────────────── */
 function fmtMoney(n: number | null | undefined): string {
@@ -18,10 +19,26 @@ function CompanyProfile() {
   const { isSuccess, output, isPending, input } =
     useToolInfo<"company-profile">();
   const sendFollowUp = useSendFollowUpMessage();
+  const analyze = useCallTool("analyze_deal");
+  const [dashboardRequested, setDashboardRequested] = useState(false);
 
   const data = output as any;
   const p = data?.profile;
   const existingDealId = data?.existing_deal_id;
+
+  // Auto-chain: when analyze_deal returns a deal_id → immediately request dashboard
+  useEffect(() => {
+    if (analyze.isSuccess && !dashboardRequested) {
+      const sc = analyze.data?.structuredContent as any;
+      const dealId = sc?.deal_id;
+      if (dealId) {
+        setDashboardRequested(true);
+        sendFollowUp(
+          `Show me the deal-dashboard for deal_id="${dealId}"`,
+        );
+      }
+    }
+  }, [analyze.isSuccess, analyze.data, dashboardRequested]);
 
   /* ── Loading ─────────────────────────────────────────────────── */
   if (isPending || !isSuccess || !output) {
@@ -64,9 +81,19 @@ function CompanyProfile() {
       <div className="cp-row-id">
         <img
           className="cp-logo"
-          src={`https://app.tryspecter.com/logo?domain=${p.domain}`}
+          src={p.logo_url || `https://logo.clearbit.com/${p.domain}`}
           alt={p.name}
+          onError={(e) => {
+            const el = e.currentTarget;
+            // Final fallback: colored initials
+            el.style.display = 'none';
+            const fallback = el.parentElement?.querySelector('.cp-logo-fallback') as HTMLElement;
+            if (fallback) fallback.style.display = 'flex';
+          }}
         />
+        <div className="cp-logo-fallback" style={{ display: 'none', width: 40, height: 40, borderRadius: 8, background: '#6366f1', color: '#fff', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 16, flexShrink: 0 }}>
+          {(p.name || '?').slice(0, 2).toUpperCase()}
+        </div>
         <div>
           <div className="cp-name">
             {p.domain ? (
@@ -159,7 +186,7 @@ function CompanyProfile() {
             className="cp-btn-process"
             onClick={() =>
               sendFollowUp(
-                `Show me the deal-dashboard for ${p.name} — deal_id is ${existingDealId}`,
+                `Show me the deal-dashboard for deal_id="${existingDealId}"`,
               )
             }
           >
@@ -167,23 +194,40 @@ function CompanyProfile() {
           </button>
           <button
             className="cp-btn-bench"
-            onClick={() =>
-              sendFollowUp(
-                `Re-analyze ${p.name} (${p.domain}) as a deal. Use analyze_deal, then immediately show the deal-dashboard with the returned deal_id.`,
-              )
-            }
+            onClick={() => {
+              setDashboardRequested(false);
+              analyze.callTool({
+                name: p.name,
+                domain: p.domain,
+                stage: p.growth_stage || "seed",
+                geo: p.hq_country || "EU",
+              });
+            }}
           >
             Re-run ↻
           </button>
+        </div>
+      ) : analyze.isPending ? (
+        <div className="cp-processing">
+          <span className="cala-pulse" />
+          <span>Creating deal & launching agents...</span>
+        </div>
+      ) : analyze.isSuccess ? (
+        <div className="cp-processing">
+          <span className="cala-pulse" />
+          <span>Analysis running — opening dashboard...</span>
         </div>
       ) : (
         <div className="cp-actions">
           <button
             className="cp-btn-process"
             onClick={() =>
-              sendFollowUp(
-                `Analyze ${p.name} (${p.domain}) as a deal — use analyze_deal with name="${p.name}" domain="${p.domain}" stage="${p.growth_stage || 'seed'}" geo="${p.hq_country || 'EU'}", then IMMEDIATELY show the deal-dashboard widget with the returned deal_id. Do both in one response.`,
-              )
+              analyze.callTool({
+                name: p.name,
+                domain: p.domain,
+                stage: p.growth_stage || "seed",
+                geo: p.hq_country || "EU",
+              })
             }
           >
             Process Deal →
