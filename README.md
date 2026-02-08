@@ -2,25 +2,57 @@
 
 **Deploy an entire investment committee — analysts, associate, and partner — in 60 seconds, directly inside ChatGPT.**
 
-Deal Bot is an AI-powered deal analysis platform that simulates a full VC investment committee. Give it a company domain, and it deploys three specialized research analysts (market, competition, traction), a synthesizing associate, and a decision-making partner — all running in parallel, all with access to real-time data via 20+ research tools.
+Deal Bot simulates a full VC investment committee. Give it a company domain, and it deploys three specialized research analysts (market, competition, traction), a synthesizing associate, and a decision-making partner — all running in parallel, all with access to real-time data via 30+ research tools.
 
-> **Live demo:** [tech-eu-paris-2026-0d53df71.alpic.live](https://tech-eu-paris-2026-0d53df71.alpic.live)
+[![Watch the Demo](https://img.shields.io/badge/Demo-Watch_on_Loom-blueviolet?style=for-the-badge&logo=loom)](https://www.loom.com/share/c6b5f21eec2d4a5d9444ed12574f8646)
+[![Live](https://img.shields.io/badge/Live-Try_It_Now-green?style=for-the-badge)](https://tech-eu-paris-2026-0d53df71.alpic.live)
+[![GitHub](https://img.shields.io/badge/Source-GitHub-black?style=for-the-badge&logo=github)](https://github.com/frankterpo/tech_eu_paris_2026)
 
 ---
 
-## Table of Contents
+## Try It Yourself (5 minutes)
 
-- [Architecture](#architecture)
-- [Key Features](#key-features)
-- [Tech Stack & Partner APIs](#tech-stack--partner-apis)
-- [Setup & Installation](#setup--installation)
-- [Configuration](#configuration)
-- [API Reference](#api-reference)
-- [Orchestration Pipeline](#orchestration-pipeline)
-- [Data Models](#data-models)
-- [Investor Lens System](#investor-lens-system)
-- [Deployment](#deployment)
-- [Project Structure](#project-structure)
+### Option A: Use the Live Deployment (no setup)
+
+1. Open [ChatGPT](https://chatgpt.com)
+2. Go to **Settings → Connected Apps → Add MCP Server**
+3. Paste: `https://tech-eu-paris-2026-0d53df71.alpic.live`
+4. Start a new chat and type: **`Look up the company mistral.ai`**
+5. Click **"Process Deal →"** on the company profile card
+6. Watch the analysts work in real time
+
+### Option B: Run Locally
+
+```bash
+# 1. Clone & install
+git clone https://github.com/frankterpo/tech_eu_paris_2026.git
+cd tech_eu_paris_2026
+npm install
+
+# 2. Create .env (see Configuration section below)
+cp .env.example .env   # or create manually
+
+# 3. Start dev server
+npm run dev             # → http://localhost:3000
+
+# 4. (Optional) Expose via ngrok for ChatGPT
+ngrok http 3000
+
+# 5. Connect ChatGPT → Settings → Connected Apps → Add MCP Server
+#    Paste your ngrok URL
+```
+
+### Option C: Deploy Your Own Instance
+
+```bash
+# 1. Install Alpic CLI
+npm i -g alpic
+
+# 2. Deploy (one command)
+ALPIC_API_KEY=your_key alpic deploy .
+
+# 3. Connect ChatGPT to your new URL
+```
 
 ---
 
@@ -33,7 +65,7 @@ Deal Bot is an AI-powered deal analysis platform that simulates a full VC invest
 └───────────────────────────┬─────────────────────────────────────┘
                             │ MCP Protocol (Skybridge)
 ┌───────────────────────────▼─────────────────────────────────────┐
-│                    Deal Bot Server                               │
+│                    Deal Bot Server (Node.js/Express)             │
 │  ┌──────────┐  ┌──────────────┐  ┌──────────────┐              │
 │  │ MCP Tools │  │ Orchestrator │  │  REST API    │              │
 │  │ (30+)     │  │ (3 waves)    │  │  /api/deals  │              │
@@ -47,11 +79,10 @@ Deal Bot is an AI-powered deal analysis platform that simulates a full VC invest
 │  │  └───────┘ └────────┘ └───────┘ └───────┘ └─────┘ └─────┘│ │
 │  └─────────────────────────────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  Persistence: SQLite + File-based (dual-write)              │ │
-│  │  Events: events.jsonl | State: state.json | Memory: mem_*   │ │
+│  │  Persistence: SQLite (UUID keys) + File-based (dual-write)  │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
-                            │ SSE / Polling
+                            │ MCP Polling
 ┌───────────────────────────▼─────────────────────────────────────┐
 │                    Skybridge Widgets (React)                     │
 │  ┌─────────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
@@ -66,29 +97,45 @@ Deal Bot is an AI-powered deal analysis platform that simulates a full VC invest
 
 ## Key Features
 
-### 1. One-Click Deal Analysis
-Type a company name → get a full investment committee simulation. Three analysts research in parallel, an associate synthesizes with bull/bear cases, a partner scores and decides.
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | **One-Click Deal Analysis** | Type a company domain → full IC simulation. 3 analysts in parallel, associate synthesizes, partner decides. |
+| 2 | **Real-Time Pipeline** | Watch agents make tool calls live. See evidence appear, queries chain, thinking unfold. |
+| 3 | **Investor Lens** | 6 fund types (Angel → IB), each with distinct risk appetite, return targets, scoring weights. |
+| 4 | **30+ Research Tools** | Specter (companies, people, competitors), Cala (100M+ knowledge base), Tavily (web), fal.ai (images). |
+| 5 | **Evidence-First** | Every claim cites evidence or is flagged ASSUMPTION. Zod validation with retry-on-failure. |
+| 6 | **Monitoring Triggers** | Revenue, hires, deals, partnerships alerts via Cala + Resend email delivery. |
+| 7 | **Investment Memo** | Auto-generated 8-slide memo with AI cover art (fal.ai). Export as PDF or Markdown. |
+| 8 | **Run History** | Every re-analysis archives the previous run. Time-series comparison across profiles. |
 
-### 2. Real-Time Pipeline Visualization
-Watch analysts make tool calls live. See evidence sources appear one by one. Track each agent's thinking, queries, and progress in real time.
+---
 
-### 3. Investor Lens System
-Configure your fund type (Angel, Early VC, Growth VC, Late VC, PE, IB) and AUM. Every analysis is calibrated to your risk appetite, return targets, and evaluation philosophy.
+## Orchestration Pipeline
 
-### 4. 30+ Research Tools
-Agents have access to Specter (company data, competitors, people), Cala (knowledge base search, entity extraction), Tavily (web search, crawl, deep research), and more.
+The orchestrator runs a **3-wave parallel pipeline** — no agent ever waits idle:
 
-### 5. Evidence-First Architecture
-Every factual claim must cite evidence or be labeled ASSUMPTION. No hallucinated analysis — all outputs are validated via Zod schemas with retry-on-failure.
+```
+Wave 0: Evidence Seed (parallel)
+├── Cala search (100M+ source knowledge base)
+├── Specter enrich (company profile, funding, team)
+├── [background] Batch intel (8 categories — revenue, hires, deals, partners...)
+└── [background] Founder deep dive (4 targeted queries)
 
-### 6. Monitoring Triggers
-Set up alerts for revenue milestones, key hires, deals won, partnerships, and business model changes. Cala monitors the knowledge base; Resend delivers email alerts.
+Wave 1: Analysts + Competitive Intel (ALL parallel)
+├── Analyst 1: Market (TAM/SAM/SOM, growth rates, demand drivers)
+├── Analyst 2: Competition (Specter AI-matched competitors, moats, positioning)
+├── Analyst 3: Traction (revenue, team quality, PMF signals, founder track record)
+├── Specter similar companies (competitive benchmarking, 5 enriched)
+└── fal.ai cover image (non-blocking, aesthetic)
 
-### 7. Investment Memo Export
-Auto-generated structured memos with AI cover art (fal.ai), exportable as PDF. Includes company overview, market analysis, competitive landscape, thesis, risks, and recommendation.
+Wave 2: Associate + Unknown Resolution (parallel)
+├── Associate (synthesize → hypotheses, bull/bear cases, risk mitigants)
+└── Unknown resolution (Specter + Tavily for analyst knowledge gaps)
 
-### 8. Time-Series Run Archive
-Every re-analysis archives the previous run. Compare results across different investor profiles, deal terms, or market conditions.
+Wave 3: Partner + Memo
+├── Partner (5-dimension rubric, decision gate, 3 gating questions)
+└── Investment memo (8 slides + AI cover art)
+```
 
 ---
 
@@ -96,60 +143,18 @@ Every re-analysis archives the previous run. Compare results across different in
 
 | Component | Technology | Role |
 |-----------|-----------|------|
-| **Frontend** | React 19, Skybridge Widgets, Vite 7 | Interactive UI inside ChatGPT |
-| **Backend** | Node.js, Express 5, TypeScript 5.9 | MCP server, REST API, orchestration |
-| **AI Orchestration** | [Dify Cloud](https://dify.ai) | Agent execution (function-calling + ReAct strategies) |
-| **Knowledge Search** | [Cala AI](https://cala.ai) | 100M+ source knowledge base, entity extraction, triggers |
-| **Company Data** | [Specter AI](https://specter.ai) | Company profiles, funding, competitors, people, revenue estimates |
+| **Frontend** | React 19, Skybridge Widgets, Vite 7 | Interactive UI rendered inside ChatGPT |
+| **Backend** | Node.js, Express 5, TypeScript 5.9 | MCP server, REST API, 3-wave orchestrator |
+| **AI Orchestration** | [Dify Cloud](https://dify.ai) | Agent execution — function-calling strategy, 3-6 tool calls per agent |
+| **Knowledge Search** | [Cala AI](https://cala.ai) | 100M+ source knowledge base, entity extraction, beta triggers API |
+| **Company Data** | [Specter AI](https://tryspecter.com) | Company profiles, funding, competitors, people, revenue estimates |
 | **Web Research** | [Tavily AI](https://tavily.com) | Real-time web search, content extraction, site crawl, async research |
 | **Image Generation** | [fal.ai](https://fal.ai) | AI-generated investment memo cover art |
 | **Email Alerts** | [Resend](https://resend.com) | Trigger notification delivery |
-| **Database** | SQLite (better-sqlite3) | Persistent storage with UUID primary keys |
-| **Validation** | Zod 4 | Schema validation with retry-on-failure |
-| **Deployment** | [Alpic](https://alpic.io) | One-command cloud deployment |
+| **Database** | SQLite (better-sqlite3) | Persistent storage — UUID primary keys, 10+ tables |
+| **Validation** | Zod 4 | Strict schema validation with retry-once on failure |
+| **Deployment** | [Alpic](https://alpic.io) | One-command cloud deployment for Skybridge apps |
 | **Protocol** | MCP (Model Context Protocol) | ChatGPT ↔ Server communication via Skybridge |
-
----
-
-## Setup & Installation
-
-### Prerequisites
-- Node.js 20+
-- npm 10+
-- API keys for partner services (see [Configuration](#configuration))
-
-### Install
-
-```bash
-git clone https://github.com/frankterpo/tech_eu_paris_2026.git
-cd tech_eu_paris_2026
-npm install
-```
-
-### Development
-
-```bash
-# Start dev server with hot reload
-npm run dev
-```
-
-The Skybridge dev server starts on `http://localhost:3000`.
-
-### Production Build
-
-```bash
-# Build TypeScript + bundle widgets
-npm run build
-
-# Start production server
-npm start
-```
-
-### Deploy to Alpic
-
-```bash
-ALPIC_API_KEY=your_key alpic deploy .
-```
 
 ---
 
@@ -163,200 +168,87 @@ CALA_API_KEY=your_cala_api_key          # Cala AI knowledge search
 SPECTER_API_KEY=your_specter_api_key    # Specter company enrichment
 
 # ── Dify Agent Keys (one per persona) ────────────────────
-ANALYST_DIFY_KEY=app-xxx                # Dify analyst agent app
-ASSOCIATE_DIFY_KEY=app-xxx              # Dify associate agent app
-PARTNER_DIFY_KEY=app-xxx                # Dify partner agent app
+ANALYST_DIFY_KEY=app-xxx                # Dify analyst agent-chat app
+ASSOCIATE_DIFY_KEY=app-xxx              # Dify associate agent-chat app
+PARTNER_DIFY_KEY=app-xxx                # Dify partner agent-chat app
 
 # ── Optional (enhanced features) ─────────────────────────
-TAVILY_API_KEY=tvly-xxx                 # Tavily web search
+TAVILY_API_KEY=tvly-xxx                 # Tavily web search + research
 FAL_AI_API_KEY=xxx                      # fal.ai cover image generation
 RESEND_API_KEY=re_xxx                   # Resend email for triggers
-LIGHTPANDA_TOKEN=xxx                    # Lightpanda headless browser
-DIFY_FC_AGENT_KEY=app-xxx              # Dify FunctionCalling sub-agent
-DIFY_REACT_AGENT_KEY=app-xxx           # Dify ReAct sub-agent
-NARRATOR_DIFY_KEY=app-xxx              # Dify narration completions
+ALPIC_API_KEY=sk_xxx                    # Alpic deployment
 
 # ── Trigger System ────────────────────────────────────────
 TRIGGER_NOTIFY_EMAIL=you@example.com    # Default trigger alert recipient
-RESEND_FROM=Deal Bot <you@example.com>  # Sender for trigger emails
 ```
 
-### Stub Mode
-If Dify API keys are missing, the system automatically falls back to **stub mode** — returning valid schema-matching JSON for all personas. This ensures the server always runs, even without Dify configured.
+### Graceful Degradation
+
+Every integration degrades gracefully — the server **always starts**:
+
+| Missing Key | Behavior |
+|-------------|----------|
+| `*_DIFY_KEY` | Stub mode — returns valid schema-matching JSON |
+| `CALA_API_KEY` | Empty evidence seed, agents rely on Specter + Tavily |
+| `SPECTER_API_KEY` | No company profile, agents rely on Cala + Tavily |
+| `TAVILY_API_KEY` | No web search fallback for unknown resolution |
+| `FAL_AI_API_KEY` | Memo renders without cover image |
+| `RESEND_API_KEY` | Trigger alerts logged but not emailed |
 
 ---
 
-## API Reference
+## How It's Built — Partner Deep Dives
 
-### MCP Tools (via ChatGPT)
+### Alpic — Cloud Deployment
 
-#### Widgets (Rich UI)
-| Tool | Description |
-|------|-------------|
-| `company-profile` | Research a company — instant Specter profile with funding, team, traction |
-| `deal-dashboard` | Live deal analysis dashboard with pipeline status, rubric, decision gate |
-| `trigger-setup` | Configure monitoring triggers for a company |
+[Alpic](https://alpic.io) deploys the full Skybridge MCP server in one command. No Docker, no CI/CD.
 
-#### Deal Workflow
-| Tool | Description |
-|------|-------------|
-| `analyze_deal` | **Primary tool** — creates deal + runs full simulation in one step |
-| `create_deal` | Create deal session with detailed deal terms (without running) |
-| `run_deal` | Start/re-run simulation for existing deal |
-| `list_deals` | List all deal analysis sessions |
-| `lookup_deal` | Find deal by company name or domain |
-
-#### Specter AI (Company Intelligence)
-| Tool | Description |
-|------|-------------|
-| `specter_company_people` | Get leadership team with LinkedIn URLs |
-| `specter_similar_companies` | AI-matched competitor discovery |
-| `specter_search_name` | Search company by name |
-| `specter_text_search` | Extract entities from unstructured text |
-| `specter_company_by_id` | Full company profile by Specter ID |
-| `specter_enrich_person` | Enrich person by LinkedIn URL |
-| `specter_person_by_id` | Person profile by Specter ID |
-| `specter_person_email` | Verified professional email lookup |
-| `specter_competitor_pipeline` | Full competitive intelligence pipeline |
-
-#### Cala AI (Knowledge Search)
-| Tool | Description |
-|------|-------------|
-| `cala_search` | Deep search with AI answer + entity extraction |
-| `cala_query` | Structured query for precise data points |
-| `cala_get_entity` | Entity detail by ID |
-| `cala_search_entities` | Fuzzy entity search |
-
-#### Tavily AI (Web Research)
-| Tool | Description |
-|------|-------------|
-| `tavily_web_search` | Real-time web search with topic/time filters |
-| `tavily_extract` | Extract/parse web page content |
-| `tavily_crawl` | Graph-based website traversal |
-| `tavily_research` | Async deep research with report generation |
-| `tavily_research_status` | Poll research task status |
-
-#### Dify Agents (Sub-tasks)
-| Tool | Description |
-|------|-------------|
-| `dify_agent_fc` | FunctionCalling strategy agent |
-| `dify_agent_react` | ReAct strategy agent (step-by-step reasoning) |
-
-#### Triggers & Monitoring
-| Tool | Description |
-|------|-------------|
-| `create_trigger` | Create a monitoring trigger with email alerts |
-| `create_triggers_batch` | Batch create triggers for a company |
-| `list_triggers` | List all active triggers |
-| `check_triggers` | Run all triggers NOW (poll + email) |
-| `delete_trigger` | Remove a trigger |
-| `cala_triggers_status` | Check Cala Beta Triggers API status |
-
-#### Utilities
-| Tool | Description |
-|------|-------------|
-| `web_extract` | Legacy URL content extraction |
-| `lightpanda_scrape` | JS-heavy page scraping via headless browser |
-
-### REST API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/deals` | Create a deal session |
-| `POST` | `/api/deals/:id/run` | Start simulation |
-| `GET` | `/api/deals/:id/stream` | SSE event stream |
-| `GET` | `/api/deals/:id/state` | Current deal state |
-| `GET` | `/api/deals/:id/runs` | List archived runs |
-| `GET` | `/api/deals` | List all deals |
-| `POST` | `/api/tools/cala/search` | Direct Cala search |
-| `POST` | `/api/tools/specter/enrich` | Direct Specter enrich |
-| `GET` | `/api/tools/health` | Tool health check |
-
-### OpenAPI Spec
-Full OpenAPI 3.0 specification for all tool endpoints: [`server/openapi-tools.json`](server/openapi-tools.json)
-
----
-
-## Orchestration Pipeline
-
-The orchestrator runs a **3-wave parallel pipeline**:
-
-```
-Wave 0: Evidence Seed (parallel)
-├── Cala search (knowledge base)
-├── Specter enrich (company profile)
-├── [background] Batch intel (8 categories, throttled)
-└── [background] Founder deep dive (4 targeted queries)
-
-Wave 1: Analysts + Competitive Intel (ALL parallel)
-├── Analyst 1: Market (TAM, growth, demand)
-├── Analyst 2: Competition (competitors, moats, positioning)
-├── Analyst 3: Traction (revenue, team, PMF signals)
-├── Specter similar companies (competitive benchmarking)
-└── fal.ai cover image (memo aesthetic)
-
-Wave 2: Associate + Unknown Resolution (parallel)
-├── Associate (synthesize → hypotheses, bull/bear, mitigants)
-└── Unknown resolution (Specter + Tavily for analyst gaps)
-
-Wave 3: Partner + Memo
-├── Partner (score rubric, decision gate, gating questions)
-└── Investment memo (8 slides + cover art)
+```bash
+ALPIC_API_KEY=your_key alpic deploy .
 ```
 
-### Event Types
-| Event | Description |
-|-------|-------------|
-| `NODE_STARTED` | Agent begins work |
-| `MSG_SENT` | Message passed between agents |
-| `NODE_DONE` | Agent completes |
-| `EVIDENCE_ADDED` | New evidence items added to state |
-| `STATE_PATCH` | State updated (hypotheses, rubric) |
-| `DECISION_UPDATED` | Decision gate produced |
-| `LIVE_UPDATE` | Real-time narration for UI |
-| `COMPANY_PROFILE_ADDED` | Specter profile ingested |
-| `TRIGGER_SUGGESTIONS_READY` | Intel categories ready for trigger creation |
-| `ERROR` | Error (non-blocking, continues degraded) |
+**What happens:**
+1. `alpic deploy .` reads `alpic.json` + `.env`, bundles the build, pushes to cloud
+2. Alpic provisions a Node.js container, injects env vars, starts the server
+3. Live at `https://tech-eu-paris-2026-0d53df71.alpic.live`
+4. ChatGPT connects to `/mcp` — all 30+ tools auto-discovered via MCP protocol
 
----
-
-## Data Models
-
-### DealState
-```typescript
-interface DealState {
-  deal_input: DealInput;          // Company info, fund config, persona config
-  evidence: Evidence[];            // All collected evidence items
-  company_profile: CompanyProfile; // Specter company data
-  hypotheses: Hypothesis[];        // Associate-generated
-  rubric: {                        // Partner scores (0-100 each)
-    market: { score: number; reasons: string[] };
-    moat: { score: number; reasons: string[] };
-    why_now: { score: number; reasons: string[] };
-    execution: { score: number; reasons: string[] };
-    deal_fit: { score: number; reasons: string[] };
-  };
-  decision_gate: {
-    decision: 'KILL' | 'PROCEED' | 'PROCEED_IF' | 'STRONG_YES';
-    gating_questions: [string, string, string]; // Exactly 3
-    evidence_checklist: ChecklistItem[];         // ≤ 15 items
-  };
-}
+**Config (`alpic.json`):**
+```json
+{ "name": "tech-eu-paris-2026", "framework": "skybridge" }
 ```
 
-### Validation (Zod Schemas)
-All agent outputs are validated with strict Zod schemas:
-- `AnalystOutput`: facts (≤12), contradictions (≤8), unknowns (≤8)
-- `AssociateOutput`: hypotheses (≤6), top_unknowns, requests_to_analysts
-- `PartnerOutput`: rubric (5 dimensions), decision_gate (exactly 3 gating Qs), evidence_checklist (≤15)
+### Dify Cloud — AI Agent Execution
 
-Failed validation triggers a **retry-once** with errors embedded in the re-prompt. Second failure emits an `ERROR` event and continues in degraded mode — the Decision Gate is always produced.
+[Dify](https://dify.ai) powers the 3 persona agents. Each runs as an **agent-chat** app with **function-calling** strategy — the agent autonomously decides which tools to call and how to chain results.
+
+**How it works:**
+1. Orchestrator sends rich context (company brief, evidence, investor lens) to Dify via `/chat-messages` (streaming)
+2. Agent has access to full tool suite via custom **OpenAPI tool provider** (`dealbot_tools`)
+3. Agent makes 3-6 tool calls, chaining results (e.g., Cala → extract entities → Specter enrich)
+4. Returns structured JSON validated server-side with Zod (retry-once on failure)
+
+**To recreate agents in Dify Cloud:**
+1. Create **Agent** app (agent-chat mode) for each persona
+2. Add **Custom Tool** provider `dealbot_tools` → point to `https://your-server/openapi-tools.json`
+3. Enable all tools in the agent's tool list
+4. Model: `gpt-4o-mini`, temperature ≤ 0.2
+5. System prompt: instruct JSON-only output matching the persona schema
+6. Copy API key → set as `ANALYST_DIFY_KEY` / `ASSOCIATE_DIFY_KEY` / `PARTNER_DIFY_KEY`
+
+**OpenAPI spec:** [`server/openapi-tools.json`](server/openapi-tools.json)
+
+### fal.ai — Investment Memo Cover Art
+
+[fal.ai](https://fal.ai) generates AI cover images for the investment memo. Fires in Wave 1 (parallel with analysts) — non-blocking. If unavailable, memo renders without cover image.
+
+**Flow:** `FalClient.generateMemoCover(companyName, industries)` → prompt → fal.ai API → image URL → memo cover slide
 
 ---
 
 ## Investor Lens System
 
-The system supports 6 fund types, each with distinct evaluation philosophies:
+6 fund types, each with distinct evaluation philosophies injected into every agent prompt:
 
 | Fund Type | Risk Appetite | Return Target | Key Focus |
 |-----------|--------------|---------------|-----------|
@@ -367,105 +259,66 @@ The system supports 6 fund types, each with distinct evaluation philosophies:
 | PE | Conservative | 2-3x MOIC | EBITDA, cash flow, operational levers |
 | IB | Conservative | Fee-based | M&A readiness, strategic positioning |
 
-Each fund type has:
-- **Scoring weights** (market, moat, why_now, execution, deal_fit — 0-2x multipliers)
-- **Deal-breakers** (automatic flags in analysis)
-- **Key metrics** (ordered by importance for the fund type)
-- **Evaluation lens** (injected into every agent prompt)
+Each includes: scoring weight multipliers, deal-breakers, prioritized metrics, and evaluation lens text.
 
 ---
 
-## Demo Video
+## MCP Tools (30+)
 
-> **[Watch the 2-minute demo on Loom](https://www.loom.com/share/c6b5f21eec2d4a5d9444ed12574f8646)**
+### Widgets (Rich UI inside ChatGPT)
+| Tool | Description |
+|------|-------------|
+| `company-profile` | Company research card — funding, team, traction, founders |
+| `deal-dashboard` | Live pipeline visualization — agents, evidence, rubric, decision |
+| `trigger-setup` | Monitoring trigger configuration UI |
+
+### Deal Workflow
+| Tool | Description |
+|------|-------------|
+| `analyze_deal` | **Primary** — creates + runs full simulation, returns deal_id |
+| `run_deal` | Re-run simulation for existing deal |
+| `list_deals` / `lookup_deal` | Find and list deal sessions |
+
+### Specter AI (9 tools)
+`specter_company_people`, `specter_similar_companies`, `specter_search_name`, `specter_text_search`, `specter_company_by_id`, `specter_enrich_person`, `specter_person_by_id`, `specter_person_email`, `specter_competitor_pipeline`
+
+### Cala AI (4 tools)
+`cala_search`, `cala_query`, `cala_get_entity`, `cala_search_entities`
+
+### Tavily AI (5 tools)
+`tavily_web_search`, `tavily_extract`, `tavily_crawl`, `tavily_research`, `tavily_research_status`
+
+### Triggers (5 tools)
+`create_trigger`, `create_triggers_batch`, `list_triggers`, `check_triggers`, `delete_trigger`
 
 ---
 
-## Deployment
+## Data Models
 
-### Alpic — Cloud Deployment (Production)
-
-[Alpic](https://alpic.io) is a one-command deployment platform for Skybridge MCP servers. It handles containerization, SSL, environment injection, and CDN distribution — no Docker files, no CI/CD pipelines.
-
-**How it works:**
-1. `alpic deploy .` reads `alpic.json` + `.env`, bundles the build output, and pushes to Alpic's cloud.
-2. Alpic provisions a container with Node.js, injects all `.env` variables, and starts the server.
-3. The server is accessible at `https://tech-eu-paris-2026-0d53df71.alpic.live`.
-4. ChatGPT connects to the `/mcp` endpoint via the MCP protocol — all 30+ tools are auto-discovered.
-
-**Deploy command:**
-```bash
-ALPIC_API_KEY=your_key alpic deploy .
-```
-
-**What Alpic handles:**
-- Environment variable injection (all API keys from `.env`)
-- SSL termination (HTTPS)
-- Static asset serving (widget JS/CSS bundles)
-- Process management (auto-restart on crash)
-- File system: `process.cwd()` is writable for SQLite + deal data; `/tmp` fallback if needed
-
-**Configuration — `alpic.json`:**
-```json
-{
-  "name": "tech-eu-paris-2026",
-  "framework": "skybridge"
+### DealState
+```typescript
+interface DealState {
+  deal_input: DealInput;          // Company, fund config, investor lens, deal terms
+  evidence: Evidence[];            // All collected evidence (Cala, Specter, Tavily)
+  company_profile: CompanyProfile; // Specter enrichment (50+ fields)
+  hypotheses: Hypothesis[];        // Associate-generated bull/bear cases
+  rubric: {                        // Partner scores (0-100 per dimension)
+    market: { score: number; reasons: string[] };
+    moat: { score: number; reasons: string[] };
+    why_now: { score: number; reasons: string[] };
+    execution: { score: number; reasons: string[] };
+    deal_fit: { score: number; reasons: string[] };
+  };
+  decision_gate: {
+    decision: 'KILL' | 'PROCEED' | 'PROCEED_IF' | 'STRONG_YES';
+    gating_questions: [string, string, string];
+    evidence_checklist: ChecklistItem[];
+  };
 }
 ```
 
-### Dify Cloud — AI Agent Execution
-
-[Dify](https://dify.ai) powers the three AI persona agents (Analyst, Associate, Partner). Each agent runs as an **agent-chat** app with **function-calling** strategy, meaning the agent autonomously decides which tools to call, when, and how to chain results.
-
-**How it works:**
-1. The orchestrator sends a rich context prompt (company brief, evidence, investor lens) to each Dify agent via the `/chat-messages` endpoint (streaming mode).
-2. Each agent has access to our full tool suite (Cala, Specter, Tavily, etc.) via a custom **OpenAPI tool provider** configured in Dify.
-3. The agent makes 3-6 tool calls per execution, chaining results (e.g., Cala search → extract entities → Specter enrich competitors).
-4. The agent returns a structured JSON output matching our Zod schema (validated server-side with retry-on-failure).
-
-**Dify setup (3 agents):**
-
-| Agent | Dify App Type | Strategy | Env Key |
-|-------|---------------|----------|---------|
-| Analyst | agent-chat | function_call | `ANALYST_DIFY_KEY` |
-| Associate | agent-chat | function_call | `ASSOCIATE_DIFY_KEY` |
-| Partner | agent-chat | function_call | `PARTNER_DIFY_KEY` |
-
-**To recreate the agents in Dify Cloud:**
-1. Create a new **Agent** app (agent-chat mode)
-2. Add a **Custom Tool** provider named `dealbot_tools` pointing to the OpenAPI spec at `https://your-server/openapi-tools.json`
-3. Enable all tools in the agent's tool list
-4. Set model to `gpt-4o-mini`, temperature ≤ 0.2
-5. Set the system prompt to instruct JSON-only output matching the persona schema
-6. Copy the API key → set as the corresponding env variable
-
-**OpenAPI spec for Dify agents:** [`server/openapi-tools.json`](server/openapi-tools.json)
-
-**Stub mode:** If any Dify key is missing, the system automatically returns valid stub responses so the server always runs. This is useful for development without Dify.
-
-### fal.ai — Investment Memo Cover Art
-
-[fal.ai](https://fal.ai) generates AI cover images for the investment memo. When a deal analysis completes, the orchestrator fires a non-blocking image generation request in Wave 1 (parallel with analysts).
-
-**How it works:**
-1. `FalClient.generateMemoCover(companyName, industries)` sends a prompt to fal.ai's image generation API.
-2. The prompt describes a professional investment memo cover incorporating the company name and industry themes.
-3. The generated image URL is attached to the memo's cover slide.
-4. If fal.ai is unavailable or `FAL_AI_API_KEY` is missing, the memo renders without a cover image (graceful degradation).
-
-**Env key:** `FAL_AI_API_KEY`
-
-### Local Development
-```bash
-npm run dev  # Starts Skybridge dev server on :3000
-```
-
-### ChatGPT Integration
-1. Deploy to Alpic (or use ngrok for local)
-2. In ChatGPT → Settings → Connected Apps → Add MCP Server
-3. Point to your deployment URL (e.g., `https://tech-eu-paris-2026-0d53df71.alpic.live`)
-4. ChatGPT auto-discovers all 30+ tools and 3 widgets via the MCP protocol
-5. Type a company domain to start — the GPT will call `company-profile` automatically
+### Validation
+All outputs validated with Zod schemas — retry-once on failure, degraded mode on second failure. **Decision Gate is always produced.**
 
 ---
 
@@ -473,46 +326,61 @@ npm run dev  # Starts Skybridge dev server on :3000
 
 ```
 tech_eu_paris_2026/
-├── server/
-│   ├── src/
-│   │   ├── server.ts              # MCP tool registrations (30+ tools)
-│   │   ├── orchestrator.ts        # 3-wave parallel pipeline
-│   │   ├── types.ts               # TypeScript types + investor profiles
-│   │   ├── validators.ts          # Zod schemas for agent outputs
-│   │   ├── validate-with-retry.ts # Retry-once validation logic
-│   │   ├── reducer.ts             # Event → state reducer
-│   │   ├── persistence.ts         # Dual-write: SQLite + file
-│   │   ├── db.ts                  # SQLite with UUID primary keys
-│   │   ├── middleware.ts          # Express middleware
-│   │   ├── tool-routes.ts         # REST API for tool endpoints
-│   │   ├── index.ts               # Server entry point
-│   │   └── integrations/
-│   │       ├── cala/client.ts     # Cala AI: search, query, entities, triggers
-│   │       ├── specter/client.ts  # Specter: enrich, similar, people, search
-│   │       ├── dify/client.ts     # Dify: agent execution, completions
-│   │       ├── tavily/client.ts   # Tavily: search, extract, crawl, research
-│   │       ├── fal/client.ts      # fal.ai: memo cover generation
-│   │       └── lightpanda/client.ts # Headless browser scraping
-│   └── openapi-tools.json         # OpenAPI 3.0 spec for Dify agents
-├── web/
-│   └── src/
-│       ├── widgets/
-│       │   ├── company-profile.tsx # Company research card
-│       │   ├── deal-dashboard.tsx  # Live pipeline + decision gate
-│       │   └── trigger-setup.tsx   # Monitoring trigger configuration
-│       ├── helpers.ts             # Skybridge hooks
-│       └── index.css              # Global styles
-├── context/                       # Architecture docs + specs
-├── dify-workflows/                # Dify agent YAML configs
-├── DEMO_SCRIPT.md                 # 2-minute video demo script
-├── AGENTS.md                      # AI agent coding rules
-├── alpic.json                     # Alpic deployment config
-├── package.json
-└── tsconfig.json
+├── server/src/
+│   ├── server.ts              # 30+ MCP tool registrations
+│   ├── orchestrator.ts        # 3-wave parallel pipeline (1800 lines)
+│   ├── types.ts               # Types + 6 investor fund profiles
+│   ├── validators.ts          # Zod schemas (analyst, associate, partner)
+│   ├── validate-with-retry.ts # Retry-once validation
+│   ├── reducer.ts             # Event → state reducer
+│   ├── persistence.ts         # SQLite + file dual-write
+│   ├── db.ts                  # SQLite — 10+ tables, UUID keys
+│   ├── index.ts               # Express entry, REST API, SSE
+│   ├── tool-routes.ts         # OpenAPI-compatible REST tool routes
+│   └── integrations/
+│       ├── cala/client.ts     # Search, query, entities, triggers, batch intel
+│       ├── specter/client.ts  # Enrich, similar, people, search, person
+│       ├── dify/client.ts     # Agent streaming, SSE parsing, JSON extraction
+│       ├── tavily/client.ts   # Search, extract, crawl, async research
+│       ├── fal/client.ts      # Memo cover image generation
+│       └── lightpanda/client.ts
+├── web/src/
+│   ├── widgets/
+│   │   ├── company-profile.tsx  # Research card + Process Deal flow
+│   │   ├── deal-dashboard.tsx   # Live pipeline, memo, radar chart, decision
+│   │   └── trigger-setup.tsx    # Alert configuration
+│   ├── helpers.ts               # Typed Skybridge hooks
+│   └── index.css                # 1600+ lines of widget styles
+├── server/openapi-tools.json    # OpenAPI 3.0 spec for Dify agents
+├── dify-workflows/              # Dify agent YAML configs
+├── context/                     # Architecture specs (10 docs)
+├── DEMO_SCRIPT.md
+├── alpic.json
+└── package.json
 ```
+
+---
+
+## Event Types
+
+| Event | Description |
+|-------|-------------|
+| `NODE_STARTED` / `NODE_DONE` | Agent lifecycle |
+| `MSG_SENT` | Inter-agent message (analyst→associate→partner) |
+| `EVIDENCE_ADDED` | New evidence items ingested |
+| `STATE_PATCH` | Hypotheses or rubric updated |
+| `DECISION_UPDATED` | Decision gate produced |
+| `LIVE_UPDATE` | Real-time narration for dashboard UI |
+| `COMPANY_PROFILE_ADDED` | Specter profile ingested |
+| `TRIGGER_SUGGESTIONS_READY` | Intel categories ready for trigger creation |
+| `ERROR` | Non-blocking — continues in degraded mode |
 
 ---
 
 ## License
 
-Built for Tech EU Paris 2026 Hackathon.
+Built for **Tech EU Paris 2026 Hackathon**.
+
+**Team:** Francisco Terpolilli
+
+**Partners:** [Cala AI](https://cala.ai) · [Specter AI](https://tryspecter.com) · [Dify](https://dify.ai) · [Tavily](https://tavily.com) · [fal.ai](https://fal.ai) · [Alpic](https://alpic.io) · [Resend](https://resend.com)
