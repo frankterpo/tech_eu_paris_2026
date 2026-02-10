@@ -14,6 +14,23 @@ function fmtNum(n: number | null | undefined): string {
   return n ? n.toLocaleString() : "—";
 }
 
+const FIRM_TYPES = [
+  { value: "angel", label: "Angel" },
+  { value: "early_vc", label: "Early VC" },
+  { value: "growth_vc", label: "Growth VC" },
+  { value: "late_vc", label: "Late VC" },
+  { value: "pe", label: "PE" },
+  { value: "ib", label: "IB" },
+];
+
+const AUM_OPTIONS = [
+  { value: "<50M", label: "<$50M" },
+  { value: "50-250M", label: "$50-250M" },
+  { value: "250M-1B", label: "$250M-1B" },
+  { value: "1-5B", label: "$1-5B" },
+  { value: "5B+", label: "$5B+" },
+];
+
 /* ── Widget ────────────────────────────────────────────────────────── */
 function CompanyProfile() {
   const { isSuccess, output, isPending, input } =
@@ -21,6 +38,9 @@ function CompanyProfile() {
   const sendFollowUp = useSendFollowUpMessage();
   const analyze = useCallTool("analyze_deal");
   const [dashboardRequested, setDashboardRequested] = useState(false);
+  const [firmType, setFirmType] = useState("early_vc");
+  const [aum, setAum] = useState("50-250M");
+  const [showFundConfig, setShowFundConfig] = useState(false);
 
   const data = output as any;
   const p = data?.profile;
@@ -31,7 +51,6 @@ function CompanyProfile() {
   useEffect(() => {
     if (analyze.isSuccess && !dashboardRequested && analyzeDealId) {
       setDashboardRequested(true);
-      // Direct imperative prompt — maximises ChatGPT compliance
       sendFollowUp(
         `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
       );
@@ -41,10 +60,15 @@ function CompanyProfile() {
   /* ── Loading ─────────────────────────────────────────────────── */
   if (isPending || !isSuccess || !output) {
     return (
-      <div className="loading">
-        {input?.domain
-          ? `Researching ${input.name || input.domain}...`
-          : "Researching company..."}
+      <div className="cp-card">
+        <div className="cp-loading">
+          <span className="cp-spinner" />
+          <span className="cp-loading-text">
+            {input?.domain
+              ? `Researching ${input.name || input.domain}...`
+              : "Researching company..."}
+          </span>
+        </div>
       </div>
     );
   }
@@ -52,14 +76,19 @@ function CompanyProfile() {
   /* ── Not found ───────────────────────────────────────────────── */
   if (!p) {
     return (
-      <div className="widget cp-compact">
-        <div className="cp-name">{data?.name || "Unknown"}</div>
-        <div className="cp-meta">Company not found in Specter</div>
+      <div className="cp-card">
+        <div className="cp-header">
+          <div className="cp-initials">{(data?.name || "?").slice(0, 2).toUpperCase()}</div>
+          <div>
+            <div className="cp-title">{data?.name || "Unknown"}</div>
+            <div className="cp-subtitle">Company not found in Specter</div>
+          </div>
+        </div>
         <button
-          className="action-btn"
+          className="cp-btn cp-btn-secondary"
           onClick={() =>
             sendFollowUp(
-              `Search for ${data?.name || data?.domain} by name in Specter`,
+              `Search for ${data?.name || data?.domain} by name in Specter and show me the results so I can pick the correct one.`,
             )
           }
         >
@@ -69,55 +98,65 @@ function CompanyProfile() {
     );
   }
 
+  const handleProcessDeal = () => {
+    analyze.callTool({
+      name: p.name,
+      domain: p.domain,
+      stage: p.growth_stage || "seed",
+      geo: p.hq_country || "EU",
+      firm_type: firmType,
+      aum,
+    });
+  };
+
   /* ── Compact profile ─────────────────────────────────────────── */
   return (
     <div
-      className="widget cp-compact"
-      data-llm={`Company: ${p.name}, Stage: ${p.growth_stage}, Funding: ${fmtMoney(p.funding_total_usd)}, Employees: ${p.employee_count}`}
+      className="cp-card"
+      data-llm={`Company: ${p.name}, Stage: ${p.growth_stage}, Funding: ${fmtMoney(p.funding_total_usd)}, Employees: ${p.employee_count}, Fund: ${firmType} ${aum}`}
     >
-      {/* Row 1: Identity */}
-      <div className="cp-row-id">
+      {/* Header: Logo + Name */}
+      <div className="cp-header">
         <img
-          className="cp-logo"
+          className="cp-avatar"
           src={p.logo_url || `https://logo.clearbit.com/${p.domain}`}
           alt={p.name}
           onError={(e) => {
             const el = e.currentTarget;
-            // Final fallback: colored initials
             el.style.display = 'none';
-            const fallback = el.parentElement?.querySelector('.cp-logo-fallback') as HTMLElement;
-            if (fallback) fallback.style.display = 'flex';
+            const fb = el.parentElement?.querySelector('.cp-initials') as HTMLElement;
+            if (fb) fb.style.display = 'flex';
           }}
         />
-        <div className="cp-logo-fallback" style={{ display: 'none', width: 40, height: 40, borderRadius: 8, background: '#6366f1', color: '#fff', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 16, flexShrink: 0 }}>
+        <div className="cp-initials" style={{ display: 'none' }}>
           {(p.name || '?').slice(0, 2).toUpperCase()}
         </div>
-        <div>
-          <div className="cp-name">
+        <div className="cp-header-text">
+          <div className="cp-title">
             {p.domain ? (
               <a
-                className="cp-name-link"
+                className="cp-title-link"
                 href={`https://www.${p.domain.replace(/^www\./i, '')}`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                {p.name} <span className="cp-ext">↗</span>
+                {p.name} <span className="cp-arrow">↗</span>
               </a>
             ) : (
               p.name
             )}
           </div>
-          <div className="cp-meta">
+          <div className="cp-subtitle">
             {p.domain}
-            {p.hq_country ? ` · ${p.hq_city || p.hq_country}` : ""}
+            {p.hq_city ? ` · ${p.hq_city}` : p.hq_country ? ` · ${p.hq_country}` : ""}
             {p.growth_stage ? ` · ${p.growth_stage}` : ""}
           </div>
         </div>
       </div>
 
-      {/* Wrong company? */}
+      {/* Wrong company link */}
       <button
-        className="cp-wrong-btn"
+        className="cp-wrong-link"
         onClick={() =>
           sendFollowUp(
             `That's not the right company. Search for "${p.name}" by name in Specter and show me the results so I can pick the correct one.`,
@@ -127,124 +166,158 @@ function CompanyProfile() {
         Not this company? Try a different domain
       </button>
 
-      {/* Row 2: Key numbers — single line */}
-      <div className="cp-nums">
-        <span>
-          <b>{fmtMoney(p.funding_total_usd)}</b> raised
-        </span>
-        <span className="cp-sep">|</span>
-        <span>
-          <b>{fmtNum(p.employee_count)}</b> team
-        </span>
-        <span className="cp-sep">|</span>
-        <span>
-          <b>{fmtNum(p.web_monthly_visits)}</b>/mo visits
-        </span>
+      {/* Key metrics row */}
+      <div className="cp-metrics">
+        <div className="cp-metric">
+          <span className="cp-metric-value">{fmtMoney(p.funding_total_usd)}</span>
+          <span className="cp-metric-label">raised</span>
+        </div>
+        <div className="cp-metric-divider" />
+        <div className="cp-metric">
+          <span className="cp-metric-value">{fmtNum(p.employee_count)}</span>
+          <span className="cp-metric-label">team</span>
+        </div>
+        <div className="cp-metric-divider" />
+        <div className="cp-metric">
+          <span className="cp-metric-value">{fmtNum(p.web_monthly_visits)}</span>
+          <span className="cp-metric-label">/mo visits</span>
+        </div>
         {p.founded_year && (
           <>
-            <span className="cp-sep">|</span>
-            <span>Est. {p.founded_year}</span>
+            <div className="cp-metric-divider" />
+            <div className="cp-metric">
+              <span className="cp-metric-value">{p.founded_year}</span>
+              <span className="cp-metric-label">est.</span>
+            </div>
           </>
         )}
       </div>
 
-      {/* Row 3: Founders (one line, hyperlinked to LinkedIn search) */}
+      {/* Founders */}
       {p.founders?.length > 0 && (
         <div className="cp-founders">
           {p.founders.slice(0, 3).map((f: string, i: number) => (
-            <span key={i}>
-              {i > 0 && " · "}
-              <a
-                className="cp-founder-link"
-                href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(f + " " + (p.name || ""))}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {f} ↗
-              </a>
-            </span>
+            <a
+              key={i}
+              className="cp-founder-chip"
+              href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(f + " " + (p.name || ""))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {f} ↗
+            </a>
           ))}
-          {p.founders.length > 3 && ` +${p.founders.length - 3}`}
+          {p.founders.length > 3 && (
+            <span className="cp-founder-more">+{p.founders.length - 3}</span>
+          )}
         </div>
       )}
 
-      {/* Row 4: One-liner description */}
+      {/* Description */}
       {p.description && (
-        <div className="cp-desc">
-          {p.description.length > 120
-            ? p.description.slice(0, 120) + "…"
+        <div className="cp-description">
+          {p.description.length > 140
+            ? p.description.slice(0, 140) + "..."
             : p.description}
         </div>
       )}
 
+      {/* ═══ FUND PROFILE SELECTOR ═══ */}
+      <div className="cp-fund-section">
+        <button
+          className="cp-fund-toggle"
+          onClick={() => setShowFundConfig(!showFundConfig)}
+        >
+          <span className="cp-fund-label">Investor Lens</span>
+          <span className="cp-fund-summary">
+            {FIRM_TYPES.find(f => f.value === firmType)?.label} · {AUM_OPTIONS.find(a => a.value === aum)?.label}
+          </span>
+          <span className={`cp-chevron ${showFundConfig ? 'open' : ''}`}>▾</span>
+        </button>
+        {showFundConfig && (
+          <div className="cp-fund-config">
+            <div className="cp-fund-row">
+              <label className="cp-fund-field-label">Firm Type</label>
+              <div className="cp-pill-group">
+                {FIRM_TYPES.map(ft => (
+                  <button
+                    key={ft.value}
+                    className={`cp-pill ${firmType === ft.value ? 'active' : ''}`}
+                    onClick={() => setFirmType(ft.value)}
+                  >
+                    {ft.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="cp-fund-row">
+              <label className="cp-fund-field-label">AUM</label>
+              <div className="cp-pill-group">
+                {AUM_OPTIONS.map(a => (
+                  <button
+                    key={a.value}
+                    className={`cp-pill ${aum === a.value ? 'active' : ''}`}
+                    onClick={() => setAum(a.value)}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ═══ ACTIONS ═══ */}
       {existingDealId ? (
-        <div className="cp-actions">
+        <div className="cp-actions-row">
           <button
-            className="cp-btn-process"
+            className="cp-btn cp-btn-primary"
             onClick={() =>
               sendFollowUp(
-                `Show me the deal-dashboard for deal_id="${existingDealId}"`,
+                `Call the deal-dashboard tool now with deal_id="${existingDealId}". Do not add any commentary.`,
               )
             }
           >
-            View Deal Dashboard →
+            View Dashboard →
           </button>
           <button
-            className="cp-btn-bench"
+            className="cp-btn cp-btn-ghost"
             onClick={() => {
               setDashboardRequested(false);
-              analyze.callTool({
-                name: p.name,
-                domain: p.domain,
-                stage: p.growth_stage || "seed",
-                geo: p.hq_country || "EU",
-              });
+              handleProcessDeal();
             }}
           >
             Re-run ↻
           </button>
         </div>
       ) : analyze.isPending ? (
-        <div className="cp-processing">
-          <span className="cala-pulse" />
+        <div className="cp-status">
+          <span className="cp-spinner" />
           <span>Creating deal & launching agents...</span>
         </div>
       ) : analyze.isSuccess ? (
-        <div className="cp-processing">
-          <span className="cala-pulse" />
-          <span>Analysis complete — opening dashboard...</span>
-          {dashboardRequested && (
-            <button
-              className="cp-btn-process"
-              style={{ marginTop: 8, fontSize: 12 }}
-              onClick={() =>
-                sendFollowUp(
-                  `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
-                )
-              }
-            >
-              Open Dashboard ↗
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="cp-actions">
+        <div className="cp-status cp-status-success">
+          <span className="cp-check">✓</span>
+          <span>Analysis complete</span>
           <button
-            className="cp-btn-process"
+            className="cp-btn cp-btn-primary cp-btn-sm"
             onClick={() =>
-              analyze.callTool({
-                name: p.name,
-                domain: p.domain,
-                stage: p.growth_stage || "seed",
-                geo: p.hq_country || "EU",
-              })
+              sendFollowUp(
+                `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
+              )
             }
           >
+            Open Dashboard →
+          </button>
+        </div>
+      ) : (
+        <div className="cp-actions-row">
+          <button className="cp-btn cp-btn-primary" onClick={handleProcessDeal}>
             Process Deal →
           </button>
           <button
-            className="cp-btn-bench"
+            className="cp-btn cp-btn-ghost"
             onClick={() =>
               sendFollowUp(
                 `Bench ${p.name} (${p.domain}) for later review.`,

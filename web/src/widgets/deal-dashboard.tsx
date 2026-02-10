@@ -468,16 +468,27 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
   };
 
   const triggerDownload = (content: string, filename: string, mimeType: string) => {
-    // Create download in current window (iframe-safe)
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 300);
+    // Try blob URL first (works in most contexts)
+    try {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+    } catch {
+      // Fallback: data URI (works in iframe contexts where blob URLs are blocked)
+      const encoded = btoa(unescape(encodeURIComponent(content)));
+      const a = document.createElement('a');
+      a.href = `data:${mimeType};base64,${encoded}`;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => document.body.removeChild(a), 300);
+    }
   };
 
   const handleDownloadMd = () => {
@@ -787,8 +798,11 @@ function DealDashboard() {
   const { isSuccess, output, isPending, input } = useToolInfo<"deal-dashboard">();
   const refreshCall = useCallTool("deal-dashboard");
   const runDeal = useCallTool("run_deal");
+  const listDeals = useCallTool("list_deals");
   const sendFollowUp = useSendFollowUpMessage();
   const [retrying, setRetrying] = React.useState(false);
+  const [showEvidence, setShowEvidence] = React.useState(false);
+  const [showHistory, setShowHistory] = React.useState(false);
   const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const failCountRef = React.useRef(0);
   const lastUpdateRef = React.useRef<number>(Date.now());
@@ -922,8 +936,47 @@ function DealDashboard() {
           }} disabled={isRefreshing}>
             {isRefreshing ? "Checking…" : "Refresh"}
           </button>
+          <button className="action-btn" onClick={() => {
+            setShowHistory(!showHistory);
+            if (!showHistory) listDeals.callTool({});
+          }}>
+            {showHistory ? "×" : "History"}
+          </button>
         </div>
       </div>
+
+      {/* ═══ HISTORY SIDE PANEL ═══ */}
+      {showHistory && (
+        <div className="history-panel">
+          <div className="history-header">
+            <span className="history-title">Deal Runs</span>
+            <button className="history-close" onClick={() => setShowHistory(false)}>×</button>
+          </div>
+          <div className="history-list">
+            {listDeals.isPending && <div className="history-loading"><span className="cp-spinner" /> Loading...</div>}
+            {listDeals.isSuccess && (() => {
+              const deals = (listDeals.data?.structuredContent as any)?.deals || [];
+              if (deals.length === 0) return <div className="history-empty">No deal runs found</div>;
+              return deals.slice(0, 20).map((deal: any) => (
+                <button
+                  key={deal.deal_id}
+                  className={`history-item ${deal.deal_id === dealId ? 'history-item-active' : ''}`}
+                  onClick={() => {
+                    refresh({ deal_id: deal.deal_id });
+                    setShowHistory(false);
+                  }}
+                >
+                  <div className="history-item-name">{deal.name || deal.domain || deal.deal_id.slice(0, 8)}</div>
+                  <div className="history-item-meta">
+                    {deal.decision && <span className={`history-decision ${decCls(deal.decision)}`}>{deal.decision}</span>}
+                    <span className="history-item-date">{deal.created_at ? new Date(deal.created_at).toLocaleDateString() : ''}</span>
+                  </div>
+                </button>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* ═══ INVESTOR PROFILE BADGE ═══ */}
       <InvestorProfileBadge
@@ -1132,16 +1185,117 @@ function DealDashboard() {
           </button>
         )}
         {d.company_profile?.domain && (
-          <button className="action-btn" onClick={() => sendFollowUp(`Research ${d.deal_input?.name} at ${d.company_profile.domain}`)}>
+          <button className="action-btn" onClick={() =>
+            sendFollowUp(`Call the company-profile tool with domain="${d.company_profile.domain}". Do not add commentary.`)
+          }>
             Company Profile
           </button>
         )}
-        {isComplete && (
-          <button className="action-btn" onClick={() => sendFollowUp(`Show all evidence for ${d.deal_input?.name} deal`)}>
-            View Evidence
+        {d.evidence?.length > 0 && (
+          <button className="action-btn" onClick={() => setShowEvidence(prev => !prev)}>
+            {showEvidence ? "Hide Evidence" : `Evidence (${d.evidence.length})`}
           </button>
         )}
       </div>
+
+      {/* ═══ EVIDENCE PANEL ═══ */}
+      {showEvidence && d.evidence?.length > 0 && (
+        <div className="evidence-panel">
+          <div className="evidence-panel-header">
+            <span className="evidence-panel-title">{d.evidence.length} Evidence Items</span>
+            <button className="evidence-close" onClick={() => setShowEvidence(false)}>×</button>
+          </div>
+          <div className="evidence-list">
+            {d.evidence.slice(0, 20).map((ev: any, i: number) => (
+              <div key={i} className="evidence-item">
+                <div className="evidence-source">
+                  <span className={`evidence-badge evidence-badge-${ev.source || 'unknown'}`}>
+                    {ev.source || 'unknown'}
+                  </span>
+                  {ev.url && (
+                    <a className="evidence-url" href={ev.url} target="_blank" rel="noopener noreferrer">↗</a>
+                  )}
+                </div>
+                <div className="evidence-title">{ev.title || ev.evidence_id}</div>
+                <div className="evidence-snippet">
+                  {(ev.snippet || '').length > 200 ? ev.snippet.slice(0, 200) + '…' : ev.snippet}
+                </div>
+              </div>
+            ))}
+            {d.evidence.length > 20 && (
+              <div className="evidence-more">+{d.evidence.length - 20} more items</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ NEXT STEPS (post-assessment) ═══ */}
+      {isComplete && (
+        <div className="next-steps">
+          <div className="next-steps-title">Next Steps</div>
+          <div className="next-steps-grid">
+            {/* Founder outreach */}
+            {d.company_profile?.founders?.length > 0 && (
+              <button
+                className="next-step-card"
+                onClick={() => sendFollowUp(
+                  `Map out profiles and outreach strategy for the founders of ${d.deal_input?.name}: ${d.company_profile.founders.join(', ')}. Include LinkedIn profiles and a concise outreach message referencing our analysis.`
+                )}
+              >
+                <span className="next-step-icon">👤</span>
+                <span className="next-step-label">Founder Outreach</span>
+                <span className="next-step-desc">
+                  Map {d.company_profile.founders.length} founder{d.company_profile.founders.length > 1 ? 's' : ''} & draft outreach
+                </span>
+              </button>
+            )}
+
+            {/* Create Cala triggers */}
+            <button
+              className="next-step-card"
+              onClick={() => sendFollowUp(
+                `Set up monitoring triggers for ${d.deal_input?.name} using the trigger-setup tool. Track: key revenue updates, key hires, key partnerships, key deals won, key business model updates, key setbacks.`
+              )}
+            >
+              <span className="next-step-icon">🔔</span>
+              <span className="next-step-label">Monitor Triggers</span>
+              <span className="next-step-desc">
+                Track key events via Cala AI alerts
+              </span>
+            </button>
+
+            {/* Competitive deep dive */}
+            {d.company_profile?.domain && (
+              <button
+                className="next-step-card"
+                onClick={() => sendFollowUp(
+                  `Do a competitive deep dive on ${d.deal_input?.name}'s key competitors using Specter similar companies for ${d.company_profile.domain}. Compare funding, team size, and traction.`
+                )}
+              >
+                <span className="next-step-icon">⚔️</span>
+                <span className="next-step-label">Competitor Deep Dive</span>
+                <span className="next-step-desc">
+                  Full competitive landscape analysis
+                </span>
+              </button>
+            )}
+
+            {/* Re-run with different lens */}
+            <button
+              className="next-step-card"
+              onClick={() => sendFollowUp(
+                `Re-analyze ${d.deal_input?.name} with a different investor lens. Current: ${d.deal_input?.firm_type || 'early_vc'}. What other fund type should we evaluate from?`
+              )}
+            >
+              <span className="next-step-icon">🔄</span>
+              <span className="next-step-label">Switch Investor Lens</span>
+              <span className="next-step-desc">
+                Re-evaluate from a different fund perspective
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
