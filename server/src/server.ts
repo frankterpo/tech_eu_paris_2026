@@ -34,12 +34,13 @@ const server = new McpServer(
     },
     {
       description:
-        "STEP 1: Research a company. Returns instant profile from Specter. After showing this, ask the user if they want to run a full deal analysis — if yes, call analyze_deal with the company name and domain, then IMMEDIATELY show deal-dashboard with the returned deal_id.",
+        "STEP 1: Research a company. Use this when the user mentions any company name or domain. Returns instant profile from Specter with funding, traction, and team data. IMPORTANT: After showing this widget, do NOT add any text or commentary — the widget is self-contained with its own 'Process Deal' button. Only speak if the user explicitly asks a question.",
       inputSchema: {
         domain: z.string().describe("Company domain (e.g. mistral.ai, stripe.com)"),
         name: z.string().optional().describe("Company name (optional)"),
         context: z.string().optional().describe("Additional search context"),
       },
+      annotations: { readOnlyHint: true },
       _meta: {
         "openai/widgetAccessible": true,
         "openai/toolInvocation/invoking": "Researching company...",
@@ -103,10 +104,11 @@ const server = new McpServer(
     },
     {
       description:
-        "STEP 3: Show deal analysis dashboard. Use this IMMEDIATELY after analyze_deal or run_deal returns a deal_id. Also use when user says 'show dashboard', 'check progress', 'view results'. If user asks for a deal but you don't have the deal_id, use lookup_deal first to find it by company name.",
+        "STEP 3: Show the live deal analysis dashboard. Use this IMMEDIATELY after analyze_deal returns a deal_id, or when the user says 'show dashboard', 'check progress', or 'show deal'. The dashboard auto-refreshes with live analyst progress, rubric scores, and investment decision. IMPORTANT: After showing this widget, do NOT add any text or commentary — the dashboard is self-updating. Only speak if the user explicitly asks a question.",
       inputSchema: {
         deal_id: z.string().describe("Deal ID (from analyze_deal, create_deal, lookup_deal, or list_deals)"),
       },
+      annotations: { readOnlyHint: true },
       _meta: {
         "openai/widgetAccessible": true,
         "openai/toolInvocation/invoking": "Loading deal analysis...",
@@ -114,14 +116,33 @@ const server = new McpServer(
       },
     },
     async ({ deal_id }) => {
+      console.log(`[deal-dashboard] Reading state for ${deal_id}…`);
       const state = PersistenceManager.getState(deal_id);
       if (!state) {
+        console.warn(`[deal-dashboard] State NOT FOUND for ${deal_id}`);
+        // NOTE: Do NOT set isError:true — ChatGPT MCP proxy converts that to 400 Bad Request
+        // which cascades into repeated failures on every poll cycle
         return {
-          content: [{ type: "text" as const, text: `Deal ${deal_id} not found.` }],
+          content: [{ type: "text" as const, text: `Deal ${deal_id} expired or not found. Click Re-analyze to start fresh.` }],
           structuredContent: { error: "not_found" as const, deal_id },
-          isError: true,
         };
       }
+      console.log(`[deal-dashboard] State found for ${deal_id}: evidence=${state.evidence?.length}, company=${state.deal_input?.name}`);
+
+      // ── AUTO-RESUME: On serverless, background promises die. Each dashboard
+      // poll advances the stalled simulation by one wave (analysts→associate→partner).
+      // Racing against Alpic's ~30s function timeout.
+      let resumeResult = 'skipped';
+      try {
+        const raceResult = await Promise.race([
+          Orchestrator.resumeIfStalled(deal_id),
+          new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 20000))
+        ]);
+        resumeResult = raceResult || 'done';
+      } catch (err: any) {
+        resumeResult = `error: ${err.message?.slice(0, 100)}`;
+      }
+      console.log(`[deal-dashboard] Resume result for ${deal_id}: ${resumeResult}`);
 
       // ── Build rich pipeline status from node memories ──────────────
       const analystConfigs = state.deal_input.persona_config?.analysts || [
@@ -154,8 +175,12 @@ const server = new McpServer(
       const hasScores = state.rubric?.market?.score > 0;
       const liveUpdates = PersistenceManager.getLiveUpdates(deal_id);
 
-      // Infer running status — all 3 analysts run in PARALLEL, so mark ALL non-done as running
-      const anyAnalystStarted = liveUpdates.some((u: any) => u.phase?.startsWith('analyst_'));
+      // ── BULLETPROOF status detection ──────────────────────────────
+      // On Alpic (serverless), we can't rely on complex event parsing.
+      // Simple rule: if events.jsonl has ANY content, the simulation
+      // has started → all non-done analysts are "running".
+      const eventsFileHasContent = PersistenceManager.hasEvents(deal_id);
+      const anyAnalystStarted = eventsFileHasContent || liveUpdates.length > 0;
       if (anyAnalystStarted) {
         for (const a of analysts) {
           if ((a as any).status !== "done") (a as any).status = "running";
@@ -206,6 +231,7 @@ const server = new McpServer(
           memo: PersistenceManager.getMemo(deal_id),
           isComplete: !!isComplete,
           avgScore: avg,
+          _debug: { resumeResult },
         },
       };
     },
@@ -217,10 +243,11 @@ const server = new McpServer(
 
   .registerTool("specter_company_people", {
     description:
-      "Get team and leadership at a company. Returns founders, C-suite, VPs, directors with LinkedIn URLs.",
+      "Get team and leadership at a company. Use this when the user asks about founders, executives, or team. Returns founders, C-suite, VPs, directors with LinkedIn URLs.",
     inputSchema: {
       company_id: z.string().describe("Specter company ID (from company-profile results)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ company_id }) => {
     try {
       const result = await SpecterClient.getCompanyPeople(company_id);
@@ -249,10 +276,11 @@ const server = new McpServer(
 
   .registerTool("specter_similar_companies", {
     description:
-      "Find companies similar to a given company using AI matching. Returns competitors with funding and stage.",
+      "Find companies similar to a given company. Use this when the user asks about competitors or competitive landscape. Returns competitors with funding and stage.",
     inputSchema: {
       company_id: z.string().describe("Specter company ID"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ company_id }) => {
     try {
       const result = await SpecterClient.getSimilarCompanies(company_id);
@@ -282,6 +310,7 @@ const server = new McpServer(
     inputSchema: {
       query: z.string().describe("Company name"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ query }) => {
     try {
       const result = await SpecterClient.searchByName(query);
@@ -308,6 +337,7 @@ const server = new McpServer(
     inputSchema: {
       query: z.string().describe("Specific search query — chain results: use entity names from previous searches"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ query }) => {
     try {
       const result = await CalaClient.searchFull(query);
@@ -357,6 +387,7 @@ const server = new McpServer(
     inputSchema: {
       text: z.string().max(1000).describe("Unstructured text to extract entities from (max 1000 chars)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ text }) => {
     try {
       const result = await SpecterClient.textSearch(text);
@@ -378,6 +409,7 @@ const server = new McpServer(
     inputSchema: {
       company_id: z.string().describe("Specter company ID"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ company_id }) => {
     try {
       const result = await SpecterClient.getCompanyById(company_id);
@@ -399,6 +431,7 @@ const server = new McpServer(
       linkedin_url: z.string().optional().describe("LinkedIn profile URL"),
       linkedin_id: z.string().optional().describe("LinkedIn ID (slug from profile URL)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ linkedin_url, linkedin_id }) => {
     try {
       const identifier: { linkedin_url?: string; linkedin_id?: string } = {};
@@ -424,6 +457,7 @@ const server = new McpServer(
     inputSchema: {
       person_id: z.string().describe("Specter person ID (from company people results)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ person_id }) => {
     try {
       const result = await SpecterClient.getPersonById(person_id);
@@ -445,6 +479,7 @@ const server = new McpServer(
       person_id: z.string().describe("Specter person ID"),
       type: z.enum(["professional", "personal"]).optional().describe("Email type (default: professional)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ person_id, type }) => {
     try {
       const result = await SpecterClient.getPersonEmail(person_id, type || 'professional');
@@ -463,6 +498,7 @@ const server = new McpServer(
     inputSchema: {
       query: z.string().describe("Structured query — e.g., 'Mistral AI revenue 2024', 'AI market size Europe'"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ query }) => {
     try {
       const result = await CalaClient.query(query);
@@ -485,6 +521,7 @@ const server = new McpServer(
     inputSchema: {
       entity_id: z.number().describe("Cala entity ID (integer)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ entity_id }) => {
     try {
       const result = await CalaClient.getEntity(entity_id);
@@ -504,6 +541,7 @@ const server = new McpServer(
       name: z.string().describe("Entity name to search for"),
       entity_types: z.array(z.string()).optional().describe("Filter by types: PERSON, ORG, GPE, LOC, PRODUCT, FAC, WORK_OF_ART, LAW, LANGUAGE"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ name, entity_types }) => {
     try {
       const result = await CalaClient.searchEntities(name, entity_types);
@@ -530,6 +568,7 @@ const server = new McpServer(
       include_domains: z.array(z.string()).optional().describe("Only include results from these domains"),
       exclude_domains: z.array(z.string()).optional().describe("Exclude results from these domains"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ query, search_depth, max_results, topic, time_range, include_images, include_domains, exclude_domains }) => {
     try {
       const result = await TavilyClient.search(query, {
@@ -562,6 +601,7 @@ const server = new McpServer(
       extract_depth: z.enum(["basic", "advanced"]).optional().describe("'advanced' for tables/embedded content (default: basic)"),
       format: z.enum(["markdown", "text"]).optional().describe("Output format (default: markdown)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ urls, extract_depth, format }) => {
     try {
       const result = await TavilyClient.extract(urls, { extractDepth: extract_depth, format });
@@ -589,6 +629,7 @@ const server = new McpServer(
       select_paths: z.array(z.string()).optional().describe("Regex patterns for URL paths to include"),
       exclude_paths: z.array(z.string()).optional().describe("Regex patterns for URL paths to exclude"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ url, instructions, max_depth, limit, select_paths, exclude_paths }) => {
     try {
       const result = await TavilyClient.crawl(url, { instructions, maxDepth: max_depth, limit, selectPaths: select_paths, excludePaths: exclude_paths });
@@ -611,6 +652,7 @@ const server = new McpServer(
       input: z.string().describe("Research task or question. E.g., 'Comprehensive analysis of Mistral AI competitive position in European LLM market'"),
       model: z.enum(["mini", "pro", "auto"]).optional().describe("'mini' for narrow Qs, 'pro' for complex multi-domain (default: auto)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ input, model }) => {
     try {
       const result = await TavilyClient.research(input, { model });
@@ -629,6 +671,7 @@ const server = new McpServer(
     inputSchema: {
       request_id: z.string().describe("Research task ID from tavily_research"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ request_id }) => {
     try {
       const result = await TavilyClient.getResearchStatus(request_id);
@@ -647,6 +690,7 @@ const server = new McpServer(
     inputSchema: {
       url: z.string().url().describe("URL to scrape and extract content from"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ url }) => {
     try {
       const result = await TavilyClient.extract(url);
@@ -802,21 +846,31 @@ const server = new McpServer(
     },
   }, async ({ deal_id }) => {
     if (!Orchestrator.dealExists(deal_id)) {
+      // Don't use isError:true — it causes ChatGPT MCP proxy to return 400
       return {
-        content: [{ type: "text" as const, text: `Deal ${deal_id} not found.` }],
-        isError: true,
+        content: [{ type: "text" as const, text: `Deal ${deal_id} not found — it may have expired. Use analyze_deal to create a fresh analysis.` }],
+        structuredContent: { error: "not_found", deal_id },
       };
     }
-    Orchestrator.runSimulation(deal_id).catch((err) =>
-      console.error(`Sim error: ${err.message}`),
+    // Race simulation against 25s timeout — Alpic has ~30s function execution limit.
+    // Background promise dies when container scales down, but deal-dashboard polls
+    // will auto-resume the simulation via Orchestrator.resumeIfStalled().
+    const simPromise = Orchestrator.runSimulation(deal_id).catch((err) =>
+      console.error(`Sim error for ${deal_id}: ${err.message}`)
     );
+    const timeout = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 25000));
+    const result = await Promise.race([simPromise.then(() => 'done' as const), timeout]);
+    const completed = result !== 'timeout';
     return {
       content: [
         {
           type: "text" as const,
-          text: `Simulation started for ${deal_id}. Use deal-dashboard widget to track progress.`,
+          text: completed
+            ? `Simulation complete for ${deal_id}. Show deal-dashboard now.`
+            : `Simulation running for ${deal_id}. Show deal-dashboard now to track live progress.`,
         },
       ],
+      structuredContent: { deal_id, completed, in_progress: !completed },
     };
   })
 
@@ -893,8 +947,9 @@ const server = new McpServer(
   })
 
   .registerTool("list_triggers", {
-    description: "List all active monitoring triggers.",
+    description: "List all active monitoring triggers. Use this when the user asks 'what triggers do I have' or 'show my alerts'.",
     inputSchema: {},
+    annotations: { readOnlyHint: true },
   }, async () => {
     // Try Cala native (may return empty if JWT auth fails)
     const calaTriggers = await CalaClient.listTriggers().catch(() => []);
@@ -1221,6 +1276,7 @@ const server = new McpServer(
       company_id: z.string().describe("Specter company ID of the target company"),
       top_n: z.number().min(1).max(10).optional().describe("Number of competitors to fully enrich (default: 5)"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ company_id, top_n }) => {
     try {
       const n = top_n || 5;
@@ -1285,6 +1341,7 @@ const server = new McpServer(
       url: z.string().describe("URL to scrape with headless browser"),
       wait_selector: z.string().optional().describe("CSS selector to wait for before extracting (e.g., '.pricing-table', '#content')"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ url, wait_selector }) => {
     try {
       const { LightpandaClient } = await import('./integrations/lightpanda/client.js');
@@ -1310,7 +1367,7 @@ const server = new McpServer(
 
   .registerTool("analyze_deal", {
     description:
-      "ONE-STEP deal analysis: creates a deal, starts the full simulation, and returns the deal_id. THIS IS THE PRIMARY TOOL when a user says 'analyze X', 'process deal', 'run a deal on X'. CRITICAL: After calling this tool, you MUST call the deal-dashboard widget with the returned deal_id IN THE SAME RESPONSE. Never return text-only — always show the dashboard.",
+      "STEP 2: Run full deal analysis with 3 AI analysts, associate synthesis, and partner decision. Use this when the user says 'analyze', 'process deal', 'run analysis', 'evaluate this company', or clicks Process Deal. Returns a deal_id. CRITICAL: After calling this, IMMEDIATELY call deal-dashboard with the returned deal_id to show the live dashboard. Do NOT add any text between analyze_deal and deal-dashboard — just chain the two calls.",
     inputSchema: {
       name: z.string().describe("Company name"),
       domain: z.string().describe("Company domain (e.g. mistral.ai)"),
@@ -1325,16 +1382,21 @@ const server = new McpServer(
       // Check if deal already exists for this company
       const existing = PersistenceManager.findDealByNameOrDomain(domain || name);
       if (existing) {
-        // Re-run simulation on existing deal
-        Orchestrator.runSimulation(existing.id).catch((err) =>
-          console.error(`Sim error: ${err.message}`),
+        // Race simulation against 25s timeout — Alpic has ~30s limit
+        const simP = Orchestrator.runSimulation(existing.id).catch((err) =>
+          console.error(`Sim error for ${existing.id}: ${err.message}`)
         );
+        const tOut = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 25000));
+        const res = await Promise.race([simP.then(() => 'done' as const), tOut]);
+        const done = res !== 'timeout';
         return {
           content: [{
             type: "text" as const,
-            text: `Deal already exists for ${name}. Re-running simulation.\nDeal ID: ${existing.id}\n\nUse the deal-dashboard widget with deal_id="${existing.id}" to track progress.`,
+            text: done
+              ? `Deal analysis complete for ${name}.\nDeal ID: ${existing.id}\n\nNow show the deal-dashboard widget with deal_id="${existing.id}".`
+              : `Deal analysis running for ${name}.\nDeal ID: ${existing.id}\n\nShow deal-dashboard widget with deal_id="${existing.id}" to track live progress.`,
           }],
-          structuredContent: { deal_id: existing.id, name: existing.name, domain: existing.domain, rerun: true },
+          structuredContent: { deal_id: existing.id, name: existing.name, domain: existing.domain, rerun: true, completed: done, in_progress: !done },
         };
       }
 
@@ -1355,17 +1417,22 @@ const server = new McpServer(
         },
       });
 
-      // Start simulation immediately
-      Orchestrator.runSimulation(dealId).catch((err) =>
-        console.error(`Sim error: ${err.message}`),
+      // Race simulation against 25s timeout — Alpic has ~30s limit
+      const simP = Orchestrator.runSimulation(dealId).catch((err) =>
+        console.error(`Sim error for ${dealId}: ${err.message}`)
       );
+      const tOut = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 25000));
+      const res = await Promise.race([simP.then(() => 'done' as const), tOut]);
+      const done = res !== 'timeout';
 
       return {
         content: [{
           type: "text" as const,
-          text: `Deal created and simulation started for ${name} (${domain}).\nDeal ID: ${dealId}\n\nNow show the deal-dashboard widget with deal_id="${dealId}" to track live progress.`,
+          text: done
+            ? `Deal analysis complete for ${name} (${domain}).\nDeal ID: ${dealId}\n\nNow show the deal-dashboard widget with deal_id="${dealId}".`
+            : `Deal analysis running for ${name} (${domain}).\nDeal ID: ${dealId}\n\nShow deal-dashboard widget with deal_id="${dealId}" to track live progress.`,
         }],
-        structuredContent: { deal_id: dealId, name, domain, firm_type: firm_type || 'early_vc', aum },
+        structuredContent: { deal_id: dealId, name, domain, firm_type: firm_type || 'early_vc', aum, completed: done, in_progress: !done },
       };
     } catch (err: any) {
       return {
@@ -1379,6 +1446,7 @@ const server = new McpServer(
     description:
       "List all deal analysis sessions with their IDs, names, domains, status, and scores. Use when the user asks 'show my deals', 'what deals have I run', 'find deal for X'. Returns deal_id values that can be used with deal-dashboard widget.",
     inputSchema: {},
+    annotations: { readOnlyHint: true },
   }, async () => {
     try {
       const deals = PersistenceManager.listDeals({ limit: 20 });
@@ -1416,6 +1484,7 @@ const server = new McpServer(
     inputSchema: {
       query: z.string().describe("Company name or domain to search for (e.g. 'Mistral AI', 'mistral.ai', 'stripe')"),
     },
+    annotations: { readOnlyHint: true },
   }, async ({ query }) => {
     try {
       const deal = PersistenceManager.findDealByNameOrDomain(query);
@@ -1449,6 +1518,7 @@ const server = new McpServer(
     description:
       "Check Cala Beta Triggers API status and list existing triggers. Triggers use /beta/triggers with X-API-KEY auth — no JWT needed.",
     inputSchema: {},
+    annotations: { readOnlyHint: true },
   }, async () => {
     const available = CalaClient.triggersAvailable();
     if (!available) {
@@ -1469,6 +1539,145 @@ const server = new McpServer(
     } catch (err: any) {
       return { content: [{ type: "text" as const, text: `Error listing triggers: ${err.message}` }], isError: true };
     }
+  })
+
+  // ══════════════════════════════════════════════════════════════════
+  // DIAGNOSTIC: debug_deal — for MCP Inspector / troubleshooting
+  // ══════════════════════════════════════════════════════════════════
+  .registerTool("debug_deal", {
+    description:
+      "Diagnostic tool: returns internal state details for a deal (DATA_DIR, file existence, event counts, liveUpdate phases). Use via MCP Inspector for troubleshooting.",
+    inputSchema: {
+      deal_id: z.string().describe("Deal ID to inspect"),
+    },
+    annotations: { readOnlyHint: true },
+  }, async ({ deal_id }) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const dataDir = process.env.DATA_DIR_OVERRIDE || (process.cwd() + '/data/deals');
+    const tmpDir = '/tmp/dealbot/data/deals';
+
+    // Check both possible DATA_DIR locations
+    const cwdPath = path.join(process.cwd(), 'data/deals', deal_id);
+    const tmpPath = path.join(tmpDir, deal_id);
+    const cwdExists = fs.existsSync(cwdPath);
+    const tmpExists = fs.existsSync(tmpPath);
+    const dealDir = cwdExists ? cwdPath : tmpExists ? tmpPath : null;
+
+    const diag: any = {
+      cwd: process.cwd(),
+      cwdDataExists: cwdExists,
+      tmpDataExists: tmpExists,
+      activeDealDir: dealDir,
+      stateFileExists: false,
+      eventsFileExists: false,
+      eventsFileSize: 0,
+      eventCount: 0,
+      liveUpdateCount: 0,
+      liveUpdatePhases: [] as string[],
+      nodeMemoryFiles: [] as string[],
+      hasState: false,
+      stateEvidence: 0,
+      stateCompanyName: '',
+    };
+
+    if (dealDir) {
+      const stateFile = path.join(dealDir, 'state.json');
+      const eventsFile = path.join(dealDir, 'events.jsonl');
+      diag.stateFileExists = fs.existsSync(stateFile);
+      diag.eventsFileExists = fs.existsSync(eventsFile);
+
+      if (diag.eventsFileExists) {
+        const stat = fs.statSync(eventsFile);
+        diag.eventsFileSize = stat.size;
+        try {
+          const lines = fs.readFileSync(eventsFile, 'utf-8').split('\n').filter((l: string) => l.trim());
+          diag.eventCount = lines.length;
+          const parsed = lines.map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          const liveUpdates = parsed.filter((e: any) => e.type === 'LIVE_UPDATE');
+          diag.liveUpdateCount = liveUpdates.length;
+          diag.liveUpdatePhases = liveUpdates.map((e: any) => e.payload?.phase).filter(Boolean);
+          // Show last 5 event types for quick diagnostics
+          diag.recentEventTypes = parsed.slice(-5).map((e: any) => `${e.type}:${e.payload?.phase || e.payload?.node_id || ''}`);
+          // Extract ALL error events with full payload
+          const errorEvents = parsed.filter((e: any) => e.type === 'ERROR');
+          diag.errorCount = errorEvents.length;
+          diag.errors = errorEvents.map((e: any) => ({
+            where: e.payload?.where || 'unknown',
+            message: (e.payload?.message || '').slice(0, 500),
+            ts: e.ts,
+          }));
+          // Show NODE_DONE events to see which nodes completed
+          const nodeDones = parsed.filter((e: any) => e.type === 'NODE_DONE');
+          diag.completedNodes = nodeDones.map((e: any) => ({
+            node: e.payload?.node_id,
+            summary: (e.payload?.output_summary || '').slice(0, 200),
+          }));
+        } catch (err: any) { diag.eventsParseError = err.message; }
+      }
+
+      if (diag.stateFileExists) {
+        try {
+          const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+          diag.hasState = true;
+          diag.stateEvidence = state.evidence?.length || 0;
+          diag.stateCompanyName = state.deal_input?.name || '';
+          diag.hasRubric = state.rubric?.market?.score > 0;
+          diag.decision = state.decision_gate?.decision || 'none';
+        } catch (err: any) { diag.stateParseError = err.message; }
+      }
+
+      // Check memory files
+      try {
+        const files = fs.readdirSync(dealDir);
+        diag.nodeMemoryFiles = files.filter((f: string) => f.startsWith('mem_'));
+        diag.allFiles = files;
+      } catch {}
+    }
+
+    // PersistenceManager checks
+    diag.pmHasEvents = PersistenceManager.hasEvents(deal_id);
+    diag.pmGetState = PersistenceManager.getState(deal_id) !== null;
+    diag.pmLiveUpdates = PersistenceManager.getLiveUpdates(deal_id).length;
+
+    // Dify health check — test if each agent key is valid
+    diag.difyKeys = {
+      analyst: !!process.env.ANALYST_DIFY_KEY,
+      associate: !!process.env.ASSOCIATE_DIFY_KEY,
+      partner: !!process.env.PARTNER_DIFY_KEY,
+      narrator: !!process.env.NARRATOR_DIFY_KEY,
+    };
+    // Quick ping to Dify API — use /parameters?user=diag (GET) to verify key validity
+    const difyBase = process.env.DIFY_BASE_URL || 'https://api.dify.ai/v1';
+    const testKeys: [string, string | undefined][] = [
+      ['analyst', process.env.ANALYST_DIFY_KEY],
+      ['associate', process.env.ASSOCIATE_DIFY_KEY],
+      ['partner', process.env.PARTNER_DIFY_KEY],
+    ];
+    diag.difyPing = {};
+    await Promise.all(testKeys.map(async ([name, key]) => {
+      if (!key) { diag.difyPing[name] = 'NO_KEY'; return; }
+      try {
+        const resp = await fetch(`${difyBase}/parameters?user=diag`, {
+          headers: { 'Authorization': `Bearer ${key}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (resp.ok) {
+          const data = await resp.json() as any;
+          const vars = data.user_input_form?.map((f: any) => Object.keys(f)[0] === 'text-input' ? f['text-input']?.variable : '?').filter(Boolean);
+          diag.difyPing[name] = `OK — vars: ${vars?.join(', ') || 'none'}`;
+        } else {
+          diag.difyPing[name] = `FAIL (${resp.status})`;
+        }
+      } catch (e: any) {
+        diag.difyPing[name] = `ERROR: ${e.message?.slice(0, 100)}`;
+      }
+    }));
+
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(diag, null, 2) }],
+      structuredContent: diag,
+    };
   });
 
 export default server;

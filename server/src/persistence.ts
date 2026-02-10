@@ -72,6 +72,12 @@ export class PersistenceManager {
   }
 
   // ── Events ───────────────────────────────────────────────────────
+  /** Fast check: does events.jsonl have any content at all? (No parsing needed.) */
+  static hasEvents(dealId: string): boolean {
+    const filePath = path.join(DATA_DIR, dealId, 'events.jsonl');
+    try { return fs.existsSync(filePath) && fs.statSync(filePath).size > 0; } catch { return false; }
+  }
+
   static saveEvent(dealId: string, event: DealEvent) {
     // File
     const dir = this.ensureDealDir(dealId);
@@ -496,7 +502,23 @@ export class PersistenceManager {
   }
 
   static getEventHistory(dealId: string, opts?: { type?: string; run_id?: string; limit?: number }) {
-    return db.getEventsByDeal(dealId, opts);
+    // Try SQLite first, then fall back to file-based events.jsonl
+    const dbEvents = db.getEventsByDeal(dealId, opts);
+    if (dbEvents.length > 0) return dbEvents;
+
+    // File-based fallback (Alpic containers may not have SQLite)
+    const filePath = path.join(DATA_DIR, dealId, 'events.jsonl');
+    if (!fs.existsSync(filePath)) return [];
+    try {
+      let events = fs.readFileSync(filePath, 'utf-8')
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter((e: any) => e !== null);
+      if (opts?.type) events = events.filter((e: any) => e.type === opts.type);
+      if (opts?.limit) events = events.slice(0, opts.limit);
+      return events;
+    } catch { return []; }
   }
 
   static getRunHistory(dealId: string) { return db.getRunsByDeal(dealId); }

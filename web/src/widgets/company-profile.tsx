@@ -27,18 +27,16 @@ function CompanyProfile() {
   const existingDealId = data?.existing_deal_id;
 
   // Auto-chain: when analyze_deal returns a deal_id → immediately request dashboard
+  const analyzeDealId = (analyze.data?.structuredContent as any)?.deal_id;
   useEffect(() => {
-    if (analyze.isSuccess && !dashboardRequested) {
-      const sc = analyze.data?.structuredContent as any;
-      const dealId = sc?.deal_id;
-      if (dealId) {
-        setDashboardRequested(true);
-        sendFollowUp(
-          `Show me the deal-dashboard for deal_id="${dealId}"`,
-        );
-      }
+    if (analyze.isSuccess && !dashboardRequested && analyzeDealId) {
+      setDashboardRequested(true);
+      // Direct imperative prompt — maximises ChatGPT compliance
+      sendFollowUp(
+        `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
+      );
     }
-  }, [analyze.isSuccess, analyze.data, dashboardRequested]);
+  }, [analyze.isSuccess, analyzeDealId, dashboardRequested]);
 
   /* ── Loading ─────────────────────────────────────────────────── */
   if (isPending || !isSuccess || !output) {
@@ -215,7 +213,20 @@ function CompanyProfile() {
       ) : analyze.isSuccess ? (
         <div className="cp-processing">
           <span className="cala-pulse" />
-          <span>Analysis running — opening dashboard...</span>
+          <span>Analysis complete — opening dashboard...</span>
+          {dashboardRequested && (
+            <button
+              className="cp-btn-process"
+              style={{ marginTop: 8, fontSize: 12 }}
+              onClick={() =>
+                sendFollowUp(
+                  `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
+                )
+              }
+            >
+              Open Dashboard ↗
+            </button>
+          )}
         </div>
       ) : (
         <div className="cp-actions">

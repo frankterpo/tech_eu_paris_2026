@@ -40,8 +40,20 @@ export class Orchestrator {
       }
     };
 
-    PersistenceManager.createDeal(dealId, input);
-    PersistenceManager.saveState(dealId, initialState);
+    try {
+      PersistenceManager.createDeal(dealId, input);
+      PersistenceManager.saveState(dealId, initialState);
+      // Verify the state was actually written
+      const verify = PersistenceManager.getState(dealId);
+      if (!verify) {
+        console.error(`[Orchestrator] CRITICAL: saveState succeeded but getState returned null for ${dealId}`);
+      } else {
+        console.log(`[Orchestrator] Deal ${dealId} created and verified on disk`);
+      }
+    } catch (err: any) {
+      console.error(`[Orchestrator] CRITICAL: Failed to create deal ${dealId}: ${err.message}`);
+      throw err;
+    }
     return dealId;
   }
 
@@ -1072,6 +1084,7 @@ Return as the required JSON schema.`;
     state = PersistenceManager.getState(dealId)!;
 
     // ── Start a new run (UUID-keyed, linked to deal) ──────────────
+    this.activeDeals.add(dealId);
     const runStartTime = Date.now();
     const runId = PersistenceManager.startRun(dealId, {
       config: { fund_config: state.deal_input.fund_config, persona_config: state.deal_input.persona_config },
@@ -1088,7 +1101,6 @@ Return as the required JSON schema.`;
       // Step 1: Orchestrator start
       this.emitEvent(dealId, 'NODE_STARTED', { node_id: 'orchestrator', role: 'system' });
       this.emitLiveUpdate(dealId, 'init', `Starting deal analysis for ${state.deal_input.name}…`);
-      this.emitLiveUpdate(dealId, 'init_stage', `📡 Understanding query: "${state.deal_input.name}"…`);
 
       // Step 2: Evidence seed — Cala (search) + Specter (company enrichment) in parallel
       const dealConfig = state.deal_input.persona_config?.deal_config || {};
@@ -1099,11 +1111,6 @@ Return as the required JSON schema.`;
         dealConfig.geo,
         dealConfig.sector,
       ].filter(Boolean).join(' ');
-
-      this.emitLiveUpdate(dealId, 'init_stage', `🔍 Searching knowledge base — Cala AI…`);
-      if (state.deal_input.domain) {
-        this.emitLiveUpdate(dealId, 'init_stage', `🏢 Enriching company profile — Specter AI…`);
-      }
 
       // ── CRITICAL PATH: Cala search + Specter enrich (evidence seed) ──
       // These two run in parallel. The batch intel queries run AFTER as a
@@ -1117,37 +1124,39 @@ Return as the required JSON schema.`;
         CalaClient.search(query).then(r => {
           PersistenceManager.completeToolAction(calaActionId, { status: 'success', latencyMs: Date.now() - calaStart, resultCount: r.length });
           PersistenceManager.logQuery({ dealId, toolActionId: calaActionId, queryText: query, queryType: 'search', provider: 'cala', resultCount: r.length });
-          this.emitLiveUpdate(dealId, 'source_found', `📄 Cala: ${r.length} evidence sources found`);
+          if (r.length > 0) this.emitLiveUpdate(dealId, 'source_found', `Cala: ${r.length} sources`);
           return r;
         }).catch(err => {
           PersistenceManager.completeToolAction(calaActionId, { status: 'error', errorMsg: err.message, latencyMs: Date.now() - calaStart });
-          this.emitLiveUpdate(dealId, 'source_found', `⚠ Cala: search timeout — continuing with Specter`);
+          this.emitLiveUpdate(dealId, 'source_found', `Cala: timeout — continuing`);
           return [];
         }),
         state.deal_input.domain
           ? SpecterClient.enrichByDomain(state.deal_input.domain).then(r => {
               if (specterActionId) PersistenceManager.completeToolAction(specterActionId, { status: 'success', latencyMs: Date.now() - specterStart, resultCount: r.evidence.length });
               if (r.profile) PersistenceManager.cacheCompanyProfile(r.profile);
-              this.emitLiveUpdate(dealId, 'source_found', `🏢 Specter: ${r.evidence.length} data points enriched`);
+              if (r.evidence.length > 0) this.emitLiveUpdate(dealId, 'source_found', `Specter: ${r.evidence.length} data points`);
               if (r.profile?.funding_total_usd) {
-                this.emitLiveUpdate(dealId, 'source_found', `💰 Funding: $${(r.profile.funding_total_usd / 1e6).toFixed(1)}M raised`);
+                this.emitLiveUpdate(dealId, 'source_found', `Funding: $${(r.profile.funding_total_usd / 1e6).toFixed(1)}M raised`);
               }
               if (r.profile?.employee_count) {
-                this.emitLiveUpdate(dealId, 'source_found', `👥 Team: ${r.profile.employee_count} employees`);
+                this.emitLiveUpdate(dealId, 'source_found', `Team: ${r.profile.employee_count} employees`);
               }
               if (r.profile?.revenue_estimate_usd) {
-                this.emitLiveUpdate(dealId, 'source_found', `📊 Revenue: ~$${(r.profile.revenue_estimate_usd / 1e6).toFixed(1)}M estimated`);
+                this.emitLiveUpdate(dealId, 'source_found', `Revenue: ~$${(r.profile.revenue_estimate_usd / 1e6).toFixed(1)}M est.`);
               }
               return r;
             }).catch(err => {
               if (specterActionId) PersistenceManager.completeToolAction(specterActionId, { status: 'error', errorMsg: err.message, latencyMs: Date.now() - specterStart });
-              this.emitLiveUpdate(dealId, 'source_found', `⚠ Specter: enrichment unavailable`);
+              this.emitLiveUpdate(dealId, 'source_found', `Specter: unavailable`);
               return { profile: null, evidence: [] };
             })
           : Promise.resolve({ profile: null, evidence: [] })
       ]);
 
-      this.emitLiveUpdate(dealId, 'init_stage', `✅ Evidence seed complete — ${calaResults.length + specterResult.evidence.length} sources collected`);
+      if (calaResults.length + specterResult.evidence.length > 0) {
+        this.emitLiveUpdate(dealId, 'init_stage', `Evidence seed: ${calaResults.length + specterResult.evidence.length} sources collected`);
+      }
 
       // ── BACKGROUND: Batch intel queries (8 categories, throttled) ──
       // Runs AFTER evidence seed to avoid Cala rate limits.
@@ -1157,12 +1166,12 @@ Return as the required JSON schema.`;
 
       const founderDeepDivePromise = (async () => {
         try {
-          this.emitLiveUpdate(dealId, 'founder_deep_dive', `🚀 Deep dive: Founders & Company Intelligence for ${companyNameForIntel}…`);
+          this.emitLiveUpdate(dealId, 'founder_deep_dive', `Deep dive: ${companyNameForIntel}`);
           const results = await CalaClient.founderDeepDiveQueries(companyNameForIntel, founderNamesForIntel);
           
           for (const r of results) {
             if (r.hasData) {
-              this.emitLiveUpdate(dealId, 'source_found', `📄 Deep Dive: ${r.label} — ${r.evidence.length} sources collected`);
+              if (r.evidence.length > 0) this.emitLiveUpdate(dealId, 'source_found', `${r.label}: ${r.evidence.length} sources`);
               this.addEvidence(dealId, r.evidence);
               // Also log as query for traceability
               PersistenceManager.logQuery({
@@ -1178,10 +1187,7 @@ Return as the required JSON schema.`;
 
       const batchIntelPromise = (async () => {
         try {
-          this.emitLiveUpdate(dealId, 'intel_queries', `🔍 Deep scan: ${CalaClient.INTEL_CATEGORIES.length} intelligence queries for ${companyNameForIntel}…`);
-          for (const cat of CalaClient.INTEL_CATEGORIES) {
-            this.emitLiveUpdate(dealId, 'intel_query', `🔎 Querying: ${cat.label}…`);
-          }
+          this.emitLiveUpdate(dealId, 'intel_queries', `Intelligence scan: ${CalaClient.INTEL_CATEGORIES.length} categories for ${companyNameForIntel}…`);
           const batchIntelActionId = PersistenceManager.startToolAction({ dealId, toolName: 'calaBatchIntel', provider: 'cala', operation: 'batch_intel', input: { company: companyNameForIntel }, calledBy: 'orchestrator' });
           const batchIntelStart = Date.now();
 
@@ -1190,7 +1196,7 @@ Return as the required JSON schema.`;
           // Emit per-result source updates (animated appearance in UI)
           for (const r of intelResults) {
             if (r.hasData) {
-              this.emitLiveUpdate(dealId, 'intel_result', `✅ ${r.label}: ${r.evidence.length} sources`);
+              if (r.evidence.length > 0) this.emitLiveUpdate(dealId, 'intel_result', `${r.label}: ${r.evidence.length} sources`);
             } else {
               this.emitLiveUpdate(dealId, 'intel_result', `○ ${r.label}: no data`);
             }
@@ -1269,29 +1275,8 @@ Return as the required JSON schema.`;
       const specterId = state.company_profile?.specter_id || '';
       const yr = new Date().getFullYear();
 
-      const subQueries: Record<string, string[]> = {
-        market: [
-          `→ Specter: Similar companies — market maturity benchmarks`,
-          `→ Specter: Company metrics — revenue, traffic, employees`,
-          `→ Cala: "${companyName} market size TAM ${yr}"`,
-          `→ Cala: "${industries} growth rate demand drivers"`,
-        ],
-        competition: [
-          `→ Specter: AI-matched competitors (ID: ${specterId.slice(0, 8)}…)`,
-          `→ Specter: Enrich top 5 competitors — domains, funding, teams`,
-          `→ Cala: "${companyName} competitors landscape"`,
-          `→ Cala: "${companyName} competitive moat defensibility"`,
-        ],
-        traction: [
-          `→ Specter: Full team roster (ID: ${specterId.slice(0, 8)}…)`,
-          `→ Specter: Enrich founders — career, education, exits`,
-          `→ Cala: "${companyName} revenue growth traction users"`,
-          `→ Cala: "${founderNames} founder background experience"`,
-        ],
-      };
-
       this.emitLiveUpdate(dealId, 'analysts_launched',
-        `🚀 Wave 1 — ${analystIds.length} analysts + competitive intel + cover image — ALL firing in parallel`);
+        `${analystIds.length} analysts launching — market, competition, traction`);
 
       // Pre-emit NODE_STARTED for ALL analysts so dashboard shows all 3 as "running" simultaneously
       for (let idx = 0; idx < analystIds.length; idx++) {
@@ -1307,7 +1292,7 @@ Return as the required JSON schema.`;
         if (!specterCompanyId) return { companies: [] as any[], evidence: [] as any[] };
         try {
           this.emitLiveUpdate(dealId, 'competitive_intel',
-            `🔍 Specter competitive intelligence — finding competitors for ${companyName}…`);
+            `Specter: finding competitors for ${companyName}…`);
           const simActionId = PersistenceManager.startToolAction({ dealId, toolName: 'specterSimilarCompanies', provider: 'specter', operation: 'similar', input: { companyId: specterCompanyId }, calledBy: 'orchestrator' });
           const simStart = Date.now();
           const { companies, evidence: similarEvidence, rawIds } = await SpecterClient.getSimilarCompanies(
@@ -1320,8 +1305,8 @@ Return as the required JSON schema.`;
           const enriched = companies.filter(c => c.name && !c.name.startsWith('(ID:'));
           for (let i = 0; i < enriched.length; i++) {
             const c = enriched[i];
-            this.emitLiveUpdate(dealId, `resolve_competitor_${i + 1}_done`,
-              `✅ ${c.name}: ${c.employee_count || '?'} employees, ${c.funding_total_usd ? '$' + (c.funding_total_usd / 1e6).toFixed(1) + 'M raised' : 'funding unknown'}`);
+            this.emitLiveUpdate(dealId, `analyst_2_competitor_${i + 1}`,
+              `${c.name}: ${c.employee_count || '?'} employees, ${c.funding_total_usd ? '$' + (c.funding_total_usd / 1e6).toFixed(1) + 'M raised' : 'funding unknown'}`);
             compEvidence.push({
               evidence_id: `specter-competitor-${i}`, title: `Competitor: ${c.name} vs ${companyName}`,
               snippet: `${c.name} (${c.domain}) | Stage: ${c.growth_stage || '?'} | Employees: ${c.employee_count || '?'} | Funding: ${c.funding_total_usd ? '$' + (c.funding_total_usd / 1e6).toFixed(1) + 'M' : '?'} | Industries: ${c.industries?.join(', ') || '?'} | HQ: ${c.hq_city || '?'}, ${c.hq_country || '?'}`,
@@ -1337,8 +1322,8 @@ Return as the required JSON schema.`;
               source: 'specter-competitive', retrieved_at: new Date().toISOString(),
             });
           }
-          this.emitLiveUpdate(dealId, 'resolve_specter_done',
-            `✓ Competitive intel: ${rawIds.length} similar IDs, ${enriched.length} profiled — ${compEvidence.length} evidence items`);
+          this.emitLiveUpdate(dealId, 'analyst_2_intel_done',
+            `Competitive intel: ${rawIds.length} similar, ${enriched.length} profiled — ${compEvidence.length} evidence`);
           return { companies: enriched, evidence: compEvidence };
         } catch (err: any) {
           console.warn(`[Orchestrator] Specter competitive intel failed: ${err.message}`);
@@ -1356,13 +1341,21 @@ Return as the required JSON schema.`;
         analystIds.map(async (analystId: string, idx: number) => {
           const specialization = analystConfigs[idx]?.specialization || 'general';
           const phase = `analyst_${idx + 1}`;
-          const queries = subQueries[specialization] || [`→ General research on ${companyName}`];
-          for (const q of queries) this.emitLiveUpdate(dealId, `${phase}_query`, q);
+
+          // ── IMMEDIATE FEEDBACK: Show what each analyst is researching ──
+          // This prevents the "Deploying queries…" stall — users see research intent instantly
+          const researchFocus: Record<string, string> = {
+            market: `Analyzing market size, TAM, growth drivers for ${companyName} in ${industries}`,
+            competition: `Mapping competitive landscape, moats, differentiation for ${companyName}`,
+            traction: `Evaluating revenue traction, growth metrics, customer signals for ${companyName}`,
+          };
+          this.emitLiveUpdate(dealId, `${phase}_query`,
+            researchFocus[specialization] || `Researching ${specialization} for ${companyName}`);
 
           const onToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => {
             if (info.thought && info.toolNames.length === 0) {
               const thought = info.thought.replace(/\n/g, ' ').slice(0, 100);
-              if (thought.length > 20) this.emitLiveUpdate(dealId, `${phase}_think`, `💭 ${thought}${info.thought.length > 100 ? '…' : ''}`);
+              if (thought.length > 20) this.emitLiveUpdate(dealId, `${phase}_think`, `${thought}${info.thought.length > 100 ? '…' : ''}`);
             } else if (info.toolNames.length > 0) {
               this.emitLiveUpdate(dealId, `${phase}_tool`, this.formatToolEvent(info.toolNames, info.toolInput));
             }
@@ -1418,7 +1411,7 @@ Return as the required JSON schema.`;
             this.emitEvent(dealId, 'ERROR', { where: `${analystId}_validation`, message: `Analyst ${analystId} output failed validation: ${analystResult.errors}` });
             PersistenceManager.saveNodeMemory(dealId, analystId, { facts: [], contradictions: [], unknowns: [], hypotheses: [], evidence_ids: [] });
             this.emitEvent(dealId, 'NODE_DONE', { node_id: analystId, output_summary: `${specialization} validation failed` });
-            this.emitLiveUpdate(dealId, `${phase}_done`, `⚠ ${specialization}: validation failed, continuing degraded`);
+            this.emitLiveUpdate(dealId, `${phase}_done`, `${specialization}: validation failed — degraded mode`);
             return null;
           }
         })
@@ -1474,7 +1467,7 @@ Return as the required JSON schema.`;
               try {
                 const searchResult = await SpecterClient.searchByName(nameMatch[1].trim());
                 if (searchResult.evidence.length > 0) {
-                  this.emitLiveUpdate(dealId, `${phase}_done`, `✅ Specter: ${searchResult.results.length} matches for "${nameMatch[1].trim()}"`);
+                  this.emitLiveUpdate(dealId, `${phase}_done`, `Specter: ${searchResult.results.length} matches for "${nameMatch[1].trim()}"`);
                   return { unknown: unk, answer: `Found ${searchResult.results.length} results`, evidence: searchResult.evidence };
                 }
               } catch { /* fall through to Tavily */ }
@@ -1484,12 +1477,12 @@ Return as the required JSON schema.`;
             try {
               const result = await TavilyClient.search(unk.question, { maxResults: 2 });
               if (result.evidence.length > 0) {
-                this.emitLiveUpdate(dealId, `${phase}_done`, `✅ ${result.evidence.length} sources found`);
+                if (result.evidence.length > 0) this.emitLiveUpdate(dealId, `${phase}_done`, `${result.evidence.length} sources found`);
                 return { unknown: unk, answer: result.answer, evidence: result.evidence };
               }
             } catch { /* skip */ }
           }
-          this.emitLiveUpdate(dealId, `${phase}_done`, `⚠ Unresolved: "${unk.question.slice(0, 60)}…"`);
+          this.emitLiveUpdate(dealId, `${phase}_done`, `Unresolved: "${unk.question.slice(0, 60)}…"`);
           return { unknown: unk, evidence: [] as any[] };
         }));
 
@@ -1506,20 +1499,13 @@ Return as the required JSON schema.`;
       this.emitLiveUpdate(dealId, 'associate',
         `🚀 Wave 2 — Associate (${totalFacts} facts) + ${allUnknowns.length} unknowns resolving in parallel`);
 
-      const assocSubQueries = [
-        `→ Cala: "${companyName} funding valuation cap table investors"`,
-        `→ Cala: "${founderNames} track record exits previous companies"`,
-        `→ Cala: "${companyName} unit economics revenue model"`,
-      ];
-      for (const q of assocSubQueries) this.emitLiveUpdate(dealId, 'associate_query', q);
-
       state = PersistenceManager.getState(dealId)!;
 
       const associateQuery = this.buildAssociateQuery(state!, analystOutputs);
       const onAssocToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => {
         if (info.thought && info.toolNames.length === 0) {
           const t = info.thought.replace(/\n/g, ' ').slice(0, 100);
-          if (t.length > 20) this.emitLiveUpdate(dealId, 'associate_think', `💭 ${t}${info.thought.length > 100 ? '…' : ''}`);
+          if (t.length > 20) this.emitLiveUpdate(dealId, 'associate_think', `${t}${info.thought.length > 100 ? '…' : ''}`);
         } else if (info.toolNames.length > 0) {
           this.emitLiveUpdate(dealId, 'associate_tool', this.formatToolEvent(info.toolNames, info.toolInput));
         }
@@ -1638,22 +1624,6 @@ Return as the required JSON schema.`;
         `Partner is scoring rubric and forming deal decision…`
       );
 
-      // Emit planned sub-queries for Partner (same UI pattern as analysts)
-      const partnerSubQueries = [
-        `→ Specter: Leadership depth — team completeness (${specterId.slice(0, 8)}…)`,
-        `→ Specter: Enrich key CxOs — career, education, exits`,
-        `→ Specter: Competitive benchmarking — peers comparison`,
-        `→ Specter: Enrich competitor domains for quantitative data`,
-        `→ Cala: "${companyName} risks challenges criticism"`,
-        `→ Cala: "${companyName} regulatory compliance barriers ${yr}"`,
-        `→ Cala: "{entity} ${companyName} controversy issues"`,
-        `→ Cala: "${companyName} customer complaints retention churn"`,
-        `→ Tavily: "${companyName} latest news ${yr}" (if gaps)`,
-      ];
-      for (const q of partnerSubQueries) {
-        this.emitLiveUpdate(dealId, 'partner_query', q);
-      }
-
       // Re-read state to get latest (includes hypotheses patch from associate)
       state = PersistenceManager.getState(dealId)!;
 
@@ -1674,7 +1644,7 @@ Return as the required JSON schema.`;
       const onPartnerToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => {
         if (info.thought && info.toolNames.length === 0) {
           const t = info.thought.replace(/\n/g, ' ').slice(0, 100);
-          if (t.length > 20) this.emitLiveUpdate(dealId, 'partner_think', `💭 ${t}${info.thought.length > 100 ? '…' : ''}`);
+          if (t.length > 20) this.emitLiveUpdate(dealId, 'partner_think', `${t}${info.thought.length > 100 ? '…' : ''}`);
         } else if (info.toolNames.length > 0) {
           this.emitLiveUpdate(dealId, 'partner_tool', this.formatToolEvent(info.toolNames, info.toolInput));
         }
@@ -1819,6 +1789,310 @@ Return as the required JSON schema.`;
         evidence_checklist: [{ q: 1, item: 'Simulation failed — treat all outputs as assumptions', type: 'ASSUMPTION', evidence_ids: [] }]
       });
       PersistenceManager.completeRun({ error_msg: err.message, duration_ms: Date.now() - runStartTime });
+    } finally {
+      this.activeDeals.delete(dealId);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // AUTO-RESUME: Called by deal-dashboard on each poll to advance a
+  // stalled simulation. On serverless (Alpic), background promises
+  // die when the container scales down, so we need this to complete
+  // the pipeline step-by-step across multiple requests.
+  //
+  // Each call is designed to complete ONE wave within ~20s:
+  //   Wave 1: Analysts (Dify agents or stubs)
+  //   Wave 2: Associate
+  //   Wave 3: Partner + memo
+  // ═══════════════════════════════════════════════════════════════════
+  // Tracks deals with active simulation or resume in progress — prevents double-execution
+  private static activeDeals = new Set<string>();
+
+  static async resumeIfStalled(dealId: string): Promise<'complete' | 'advanced' | 'running' | 'noop'> {
+    // Prevent concurrent resumes / double-execution with run()
+    if (this.activeDeals.has(dealId)) {
+      console.log(`[Resume] ${dealId}: already in progress (run or resume active)`);
+      return 'running';
+    }
+
+    const state = PersistenceManager.getState(dealId);
+    if (!state) {
+      console.log(`[Resume] ${dealId}: no state found`);
+      return 'noop';
+    }
+
+    // Check what has completed by reading events
+    const events = PersistenceManager.getEventHistory(dealId);
+    const nodesDone = new Set(
+      events.filter((e: any) => e.type === 'NODE_DONE').map((e: any) => e.payload?.node_id)
+    );
+    const nodesStarted = new Set(
+      events.filter((e: any) => e.type === 'NODE_STARTED').map((e: any) => e.payload?.node_id)
+    );
+
+    console.log(`[Resume] ${dealId}: ${events.length} events, started=[${[...nodesStarted].join(',')}], done=[${[...nodesDone].join(',')}]`);
+
+    // If orchestrator completed, nothing to do
+    if (nodesDone.has('orchestrator')) return 'complete';
+
+    // If orchestrator started but analysts didn't → evidence seed was interrupted.
+    // Skip evidence seed (whatever evidence exists is enough) and launch analysts directly.
+    if (!nodesStarted.has('analyst_1')) {
+      console.log(`[Resume] ${dealId}: analyst_1 not started yet — LAUNCHING ANALYSTS (evidence seed may have been interrupted)`);
+      // Emit NODE_STARTED for analysts so subsequent resumes track correctly
+      for (const aid of ['analyst_1', 'analyst_2', 'analyst_3']) {
+        this.emitEvent(dealId, 'NODE_STARTED', { node_id: aid, role: 'analyst' });
+      }
+      this.activeDeals.add(dealId);
+      try {
+        await this.resumeAnalysts(dealId, state, new Set());
+        console.log(`[Resume] ${dealId}: analysts wave complete (from cold start)`);
+        return 'advanced';
+      } catch (err: any) {
+        console.error(`[Resume] ${dealId}: analysts cold-start failed: ${err.message}`);
+        return 'advanced';
+      } finally {
+        this.activeDeals.delete(dealId);
+      }
+    }
+
+    // Determine which wave to run
+    const analyst1Done = nodesDone.has('analyst_1');
+    const analyst2Done = nodesDone.has('analyst_2');
+    const analyst3Done = nodesDone.has('analyst_3');
+    const allAnalystsDone = analyst1Done && analyst2Done && analyst3Done;
+    const associateDone = nodesDone.has('associate');
+    const partnerDone = nodesDone.has('partner');
+
+    // If analysts started but not all done → need to run analysts
+    if (!allAnalystsDone) {
+      console.log(`[Resume] ${dealId}: RESUMING ANALYSTS (done: ${[analyst1Done, analyst2Done, analyst3Done]})`);
+      this.activeDeals.add(dealId);
+      try {
+        await this.resumeAnalysts(dealId, state, nodesDone);
+        console.log(`[Resume] ${dealId}: analysts wave complete`);
+        return 'advanced';
+      } catch (err: any) {
+        console.error(`[Resume] ${dealId}: analysts failed: ${err.message}`);
+        return 'advanced';
+      } finally {
+        this.activeDeals.delete(dealId);
+      }
+    }
+
+    // If analysts done but associate not done → run associate
+    if (allAnalystsDone && !associateDone) {
+      console.log(`[Resume] ${dealId}: RESUMING ASSOCIATE`);
+      this.activeDeals.add(dealId);
+      try {
+        await this.resumeAssociate(dealId, state);
+        console.log(`[Resume] ${dealId}: associate wave complete`);
+        return 'advanced';
+      } catch (err: any) {
+        console.error(`[Resume] ${dealId}: associate failed: ${err.message}`);
+        return 'advanced';
+      } finally {
+        this.activeDeals.delete(dealId);
+      }
+    }
+
+    // If associate done but partner not done → run partner
+    if (associateDone && !partnerDone) {
+      console.log(`[Resume] ${dealId}: RESUMING PARTNER`);
+      this.activeDeals.add(dealId);
+      try {
+        await this.resumePartner(dealId, state);
+        console.log(`[Resume] ${dealId}: partner wave complete`);
+        return 'advanced';
+      } catch (err: any) {
+        console.error(`[Resume] ${dealId}: partner failed: ${err.message}`);
+        return 'advanced';
+      } finally {
+        this.activeDeals.delete(dealId);
+      }
+    }
+
+    console.log(`[Resume] ${dealId}: all waves complete`);
+    return 'complete';
+  }
+
+  private static async resumeAnalysts(dealId: string, state: DealState, nodesDone: Set<string>): Promise<void> {
+    const analystConfigs = [
+      { specialization: 'market' },
+      { specialization: 'competition' },
+      { specialization: 'traction' }
+    ];
+    const analystIds = ['analyst_1', 'analyst_2', 'analyst_3'];
+    const companyName = state.deal_input.name;
+    const industries = state.company_profile?.industries?.join(', ') || companyName;
+
+    this.emitLiveUpdate(dealId, 'resume', `Resuming analyst analysis for ${companyName}…`);
+
+    const results = await Promise.all(
+      analystIds.map(async (analystId, idx) => {
+        if (nodesDone.has(analystId)) return null; // Already done
+
+        const specialization = analystConfigs[idx]?.specialization || 'general';
+        const phase = `analyst_${idx + 1}`;
+
+        this.emitLiveUpdate(dealId, `${phase}_query`,
+          `Resuming ${specialization} analysis for ${companyName}…`);
+
+        const analystQuery = this.buildAnalystQuery(state, specialization, analystId, []);
+        const analystResult = await validateWithRetry(
+          AnalystOutputSchema, 'AnalystOutput',
+          async (retryPrompt?: string) => {
+            return DifyClient.runAgent('analyst', {
+              deal_input: this.toInputStr(state.deal_input),
+              fund_config: this.toInputStr(state.deal_input.fund_config),
+              specialization, analyst_id: analystId,
+              company_profile: this.toInputStr(state.company_profile),
+              evidence: this.compactEvidence(state.evidence),
+              prior_analyses: '[]',
+            }, retryPrompt || analystQuery);
+          }
+        );
+
+        if (analystResult.ok) {
+          const eids = analystResult.data.facts.flatMap(f => f.evidence_ids)
+            .concat(analystResult.data.contradictions.flatMap(c => c.evidence_ids));
+          PersistenceManager.saveNodeMemory(dealId, analystId, {
+            ...analystResult.data, hypotheses: [], evidence_ids: [...new Set(eids)]
+          });
+          this.emitEvent(dealId, 'MSG_SENT', { from: analystId, to: 'associate', summary: `Analysis complete for ${specialization}` });
+          this.emitEvent(dealId, 'NODE_DONE', { node_id: analystId, output_summary: `${specialization} analysis done` });
+          this.emitLiveUpdate(dealId, `${phase}_done`,
+            `✓ ${specialization}: ${analystResult.data.facts.length} facts, ${analystResult.data.unknowns.length} unknowns`);
+          return analystResult.data;
+        } else {
+          this.emitEvent(dealId, 'ERROR', { where: `${analystId}_validation`, message: `Resume: analyst ${analystId} failed` });
+          PersistenceManager.saveNodeMemory(dealId, analystId, { facts: [], contradictions: [], unknowns: [], hypotheses: [], evidence_ids: [] });
+          this.emitEvent(dealId, 'NODE_DONE', { node_id: analystId, output_summary: `${specialization} validation failed` });
+          this.emitLiveUpdate(dealId, `${phase}_done`, `${specialization}: degraded`);
+          return null;
+        }
+      })
+    );
+  }
+
+  private static async resumeAssociate(dealId: string, state: DealState): Promise<void> {
+    // Gather analyst outputs from node memory
+    const analystOutputs: AnalystOutput[] = [];
+    for (const aid of ['analyst_1', 'analyst_2', 'analyst_3']) {
+      const mem = PersistenceManager.getNodeMemory(dealId, aid);
+      if (mem && mem.facts && mem.facts.length > 0) {
+        analystOutputs.push(mem as unknown as AnalystOutput);
+      }
+    }
+
+    this.emitEvent(dealId, 'NODE_STARTED', { node_id: 'associate', role: 'associate' });
+    this.emitLiveUpdate(dealId, 'associate', `Associate synthesizing ${analystOutputs.reduce((s, a) => s + a.facts.length, 0)} facts…`);
+
+    state = PersistenceManager.getState(dealId)!;
+    const associateQuery = this.buildAssociateQuery(state, analystOutputs);
+    const associateResult = await validateWithRetry(
+      AssociateOutputSchema, 'AssociateOutput',
+      async (retryPrompt?: string) => {
+        return DifyClient.runAgent('associate', {
+          deal_input: this.toInputStr(state.deal_input),
+          fund_config: this.toInputStr(state.deal_input.fund_config),
+          analyst_outputs: this.toInputStr(analystOutputs),
+          company_profile: this.toInputStr(state.company_profile),
+          evidence: this.compactEvidence(state.evidence),
+        }, retryPrompt || associateQuery);
+      }
+    );
+
+    if (associateResult.ok) {
+      PersistenceManager.saveNodeMemory(dealId, 'associate', {
+        facts: [], contradictions: [], unknowns: [],
+        hypotheses: associateResult.data.hypotheses,
+        evidence_ids: [...new Set(associateResult.data.hypotheses.flatMap(h => h.support_evidence_ids))]
+      });
+      this.emitEvent(dealId, 'STATE_PATCH', { hypotheses: associateResult.data.hypotheses, patch_summary: 'Associate hypotheses added' });
+    } else {
+      this.emitEvent(dealId, 'ERROR', { where: 'associate_validation', message: 'Resume: associate failed' });
+      PersistenceManager.saveNodeMemory(dealId, 'associate', { facts: [], contradictions: [], unknowns: [], hypotheses: [], evidence_ids: [] });
+    }
+
+    this.emitEvent(dealId, 'MSG_SENT', { from: 'associate', to: 'partner', summary: 'Synthesis complete' });
+    this.emitEvent(dealId, 'NODE_DONE', { node_id: 'associate', output_summary: 'Synthesis complete' });
+    this.emitLiveUpdate(dealId, 'associate_done',
+      associateResult.ok
+        ? `✓ Associate: ${associateResult.data.hypotheses.length} hypotheses`
+        : `Associate: degraded mode`);
+  }
+
+  private static async resumePartner(dealId: string, state: DealState): Promise<void> {
+    const assocMem = PersistenceManager.getNodeMemory(dealId, 'associate');
+    const associateForPartner = assocMem?.hypotheses?.length
+      ? { hypotheses: assocMem.hypotheses, top_unknowns: [], requests_to_analysts: [] }
+      : { hypotheses: [], top_unknowns: [{ question: 'Associate failed', why_it_matters: 'Degraded' }], requests_to_analysts: [] };
+
+    this.emitEvent(dealId, 'NODE_STARTED', { node_id: 'partner', role: 'partner' });
+    this.emitLiveUpdate(dealId, 'partner', `Partner scoring rubric…`);
+
+    state = PersistenceManager.getState(dealId)!;
+    const partnerQuery = this.buildPartnerQuery(state, associateForPartner as AssociateOutput);
+    const partnerResult = await validateWithRetry(
+      PartnerOutputSchema, 'PartnerOutput',
+      async (retryPrompt?: string) => {
+        return DifyClient.runAgent('partner', {
+          deal_input: this.toInputStr(state.deal_input),
+          fund_config: this.toInputStr(state.deal_input.fund_config),
+          associate_output: this.toInputStr(associateForPartner),
+          company_profile: this.toInputStr(state.company_profile),
+          evidence: this.compactEvidence(state.evidence),
+        }, retryPrompt || partnerQuery);
+      }
+    );
+
+    if (partnerResult.ok) {
+      const enforced = enforceEvidenceRule(partnerResult.data);
+      PersistenceManager.saveNodeMemory(dealId, 'partner', {
+        facts: [], contradictions: [], unknowns: [], hypotheses: [],
+        evidence_ids: [...new Set(enforced.decision_gate.evidence_checklist.filter(c => c.type === 'EVIDENCE').flatMap(c => c.evidence_ids))]
+      });
+      this.emitEvent(dealId, 'STATE_PATCH', { rubric: enforced.rubric, patch_summary: 'Partner rubric scores' });
+      this.updateDecisionGate(dealId, enforced.decision_gate);
+
+      const r = enforced.rubric;
+      const avg = Math.round((r.market.score + r.moat.score + r.why_now.score + r.execution.score + r.deal_fit.score) / 5);
+      this.emitLiveUpdate(dealId, 'complete',
+        `✓ Deal analysis complete — Decision: ${enforced.decision_gate.decision} | Avg score: ${avg}/100`);
+    } else {
+      this.emitEvent(dealId, 'ERROR', { where: 'partner_validation', message: 'Resume: partner failed' });
+      PersistenceManager.saveNodeMemory(dealId, 'partner', { facts: [], contradictions: [], unknowns: [], hypotheses: [], evidence_ids: [] });
+      this.updateDecisionGate(dealId, {
+        decision: 'PROCEED_IF',
+        gating_questions: ['Validation failed', 'Manual review needed', 'Reassess after fix'],
+        evidence_checklist: [{ q: 1, item: 'Partner validation failed', type: 'ASSUMPTION', evidence_ids: [] }]
+      });
+      this.emitLiveUpdate(dealId, 'complete', `Deal analysis complete — degraded mode`);
+    }
+
+    this.emitEvent(dealId, 'MSG_SENT', { from: 'partner', to: 'orchestrator', summary: `Decision made` });
+    this.emitEvent(dealId, 'NODE_DONE', { node_id: 'partner', output_summary: `Decision gate set` });
+
+    // Generate memo from whatever state exists
+    try {
+      const finalState = PersistenceManager.getState(dealId)!;
+      const analystOutputs: AnalystOutput[] = [];
+      for (const aid of ['analyst_1', 'analyst_2', 'analyst_3']) {
+        const mem = PersistenceManager.getNodeMemory(dealId, aid);
+        if (mem?.facts?.length) analystOutputs.push(mem as unknown as AnalystOutput);
+      }
+      const assocMemFinal = PersistenceManager.getNodeMemory(dealId, 'associate');
+      const memoSlides = this.buildMemoSlides(
+        finalState, analystOutputs,
+        assocMemFinal?.hypotheses?.length ? assocMemFinal as unknown as AssociateOutput : null
+      );
+      PersistenceManager.saveMemo(dealId, memoSlides);
+      this.emitLiveUpdate(dealId, 'memo_done', `Investment memo generated — ${memoSlides.length} slides`);
+    } catch (err: any) {
+      console.warn(`[Resume] Memo generation failed: ${err.message}`);
+    }
+
+    this.emitEvent(dealId, 'NODE_DONE', { node_id: 'orchestrator', output_summary: 'Simulation complete' });
   }
 }

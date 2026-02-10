@@ -14,12 +14,14 @@ Deal Bot simulates a full VC investment committee. Give it a company domain, and
 
 ### Option A: Use the Live Deployment (no setup)
 
-1. Open [ChatGPT](https://chatgpt.com)
-2. Go to **Settings → Connected Apps → Add MCP Server**
-3. Paste: `https://tech-eu-paris-2026-0d53df71.alpic.live`
-4. Start a new chat and type: **`Look up the company mistral.ai`**
+1. Open [ChatGPT](https://chatgpt.com) → **Settings → Developer Mode** (enable if not already)
+2. Click **"Add MCP Server"** → Transport: **Streamable HTTP**
+3. URL: `https://tech-eu-paris-2026-0d53df71.alpic.live/mcp` → Save
+4. Start a **new chat** and type: **`Look up the company mistral.ai`**
 5. Click **"Process Deal →"** on the company profile card
-6. Watch the analysts work in real time
+6. Watch the analysts work in real time on the deal dashboard
+
+> **Tip:** If the dashboard doesn't auto-open after processing, type: `Show deal dashboard for deal_id="<id>"` using the ID from the tool response.
 
 ### Option B: Run Locally
 
@@ -53,6 +55,35 @@ ALPIC_API_KEY=your_key alpic deploy .
 
 # 3. Connect ChatGPT to your new URL
 ```
+
+### Option D: Build Your Own Skybridge App
+
+Want to build something similar? Deal Bot is built on **Skybridge** — the framework for creating ChatGPT Apps with rich widgets and MCP tools.
+
+```bash
+# Scaffold a new Skybridge project
+npm create skybridge@latest
+
+# Or add the skill to an existing project
+npx skills add alpic-ai/skybridge
+```
+
+Then deploy on [app.alpic.ai](https://app.alpic.ai) (login → connect GitHub → create project).
+
+---
+
+## What's New (V2 — February 2026)
+
+| Change | Detail |
+|--------|--------|
+| **Auto-Resume Pipeline** | Serverless-safe: if Alpic container times out, each dashboard poll advances the simulation by one wave (analysts → associate → partner). No data loss. |
+| **Graceful Dify Fallback** | 401/403 from Dify → automatic stub responses. Pipeline always completes. |
+| **Double-Execution Guard** | `activeDeals` set prevents concurrent run/resume conflicts. |
+| **Investment Memo in Resume Path** | Memo auto-generated even when simulation completes across multiple requests. |
+| **Dashboard Debug Field** | `_debug.resumeResult` in structuredContent for remote troubleshooting. |
+| **ChatGPT Developer Mode** | `readOnlyHint` annotations on 22+ tools — skip confirmation dialogs. |
+| **Improved Tool Descriptions** | "Use this when…" guidance for better ChatGPT tool selection. |
+| **Competitive Intel Dedup** | No more repeated competitor entries in the dashboard feed. |
 
 ---
 
@@ -199,11 +230,18 @@ Every integration degrades gracefully — the server **always starts**:
 
 ## How It's Built — Partner Deep Dives
 
-### Alpic — Cloud Deployment
+### Alpic + Skybridge — Framework & Cloud Deployment
 
-[Alpic](https://alpic.io) deploys the full Skybridge MCP server in one command. No Docker, no CI/CD.
+Deal Bot is built on **[Skybridge](https://github.com/alpic-ai/skybridge)** — the open-source framework for creating ChatGPT Apps with interactive widgets. [Alpic](https://alpic.io) deploys the full MCP server in one command. No Docker, no CI/CD.
 
 ```bash
+# Start from scratch
+npm create skybridge@latest
+
+# Or add to existing project
+npx skills add alpic-ai/skybridge
+
+# Deploy
 ALPIC_API_KEY=your_key alpic deploy .
 ```
 
