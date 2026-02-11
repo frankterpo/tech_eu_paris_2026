@@ -4,7 +4,7 @@
 
 Deal Bot simulates a full VC investment committee. Give it a company domain, and it deploys three specialized research analysts (market, competition, traction), a synthesizing associate, and a decision-making partner — all running in parallel, all with access to real-time data via 30+ research tools.
 
-[![Watch the Demo](https://img.shields.io/badge/Demo-Watch_on_Loom-blueviolet?style=for-the-badge&logo=loom)](https://www.loom.com/share/c6b5f21eec2d4a5d9444ed12574f8646)
+[![Watch the Demo](https://img.shields.io/badge/Demo-Watch_on_Loom-blueviolet?style=for-the-badge&logo=loom)](https://www.loom.com/share/5f9542c8f96545cba1d1c1abde822cc6)
 [![Live](https://img.shields.io/badge/Live-Try_It_Now-green?style=for-the-badge)](https://tech-eu-paris-2026-0d53df71.alpic.live)
 [![GitHub](https://img.shields.io/badge/Source-GitHub-black?style=for-the-badge&logo=github)](https://github.com/frankterpo/tech_eu_paris_2026)
 
