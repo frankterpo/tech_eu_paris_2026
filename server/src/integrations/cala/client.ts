@@ -373,149 +373,34 @@ export class CalaClient {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // TRIGGERS — Cala Beta Trigger API via /beta/triggers
-  // Uses X-API-KEY auth (same as knowledge endpoints). No JWT needed.
+  // TRIGGERS — Decommissioned: /beta/triggers was temporary.
   //
-  // Flow: POST /beta/triggers requires an `answer` field — the current
-  // baseline from knowledge/search. Cala periodically re-runs the query
-  // and fires notifications when the answer meaningfully changes.
+  // New flow:
+  //   1. Analysts run knowledge queries → baselines cached locally
+  //   2. User manually creates triggers at https://console.cala.ai/triggers
+  //   3. Cala fires webhook POST to our /api/webhooks/cala-trigger
+  //   4. We forward via Resend email to the user
+  //
+  // createTrigger returns null — triggers are local-only.
   // ═══════════════════════════════════════════════════════════════════
 
-  /**
-   * Create a Cala trigger with auto-fetched baseline answer.
-   * 1. Calls knowledge/search with the query to get the current answer
-   * 2. Creates trigger at /beta/triggers with query + answer as baseline
-   * 3. Optionally attaches email/webhook notifications
-   */
-  static async createTrigger(trigger: {
+  /** @deprecated Beta API decommissioned. Returns null — triggers saved locally by caller. */
+  static async createTrigger(_trigger: {
     name: string;
     query: string;
     email?: string;
     webhookUrl?: string;
+    baselineAnswer?: string;
   }): Promise<CalaTrigger | null> {
-    if (!this.getKey()) return null;
-    try {
-      // Step 1: Get baseline answer from knowledge/search
-      console.log(`[Cala] Fetching baseline for trigger: "${trigger.query.slice(0, 60)}…"`);
-      const searchResult = await this.searchFull(trigger.query);
-      const baselineAnswer = searchResult.content || '';
-
-      if (!baselineAnswer) {
-        console.warn(`[Cala] Empty baseline answer for query — trigger may fire immediately on first check`);
-      }
-
-      // Step 2: Build notifications array
-      const notifications: { type: 'email' | 'webhook'; target: string }[] = [];
-      if (trigger.email) notifications.push({ type: 'email', target: trigger.email });
-      if (trigger.webhookUrl) notifications.push({ type: 'webhook', target: trigger.webhookUrl });
-
-      // Step 3: Create trigger via /beta/triggers
-      console.log(`[Cala] Creating trigger: "${trigger.name}" (baseline: ${baselineAnswer.length} chars, ${notifications.length} notifications)`);
-      const data = await this.apiFetch(`${this.BETA_BASE}/triggers`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name: trigger.name,
-          query: trigger.query,
-          answer: baselineAnswer,
-          notifications,
-        }),
-      });
-      console.log(`[Cala] Trigger created: ${data.id} (status: ${data.status})`);
-      return data as CalaTrigger;
-    } catch (err: any) {
-      console.error(`[Cala] Create trigger failed: ${err.message}`);
-      return null;
-    }
+    console.log(`[Cala] Trigger saved locally (beta API decommissioned)`);
+    return null;
   }
 
-  /**
-   * GET /beta/triggers — list all triggers.
-   */
-  static async listTriggers(): Promise<CalaTrigger[]> {
-    if (!this.getKey()) return [];
-    try {
-      const data = await this.apiFetch(`${this.BETA_BASE}/triggers`);
-      return Array.isArray(data) ? data : [];
-    } catch (err: any) {
-      console.warn(`[Cala] List triggers failed: ${err.message}`);
-      return [];
-    }
-  }
+  /** @deprecated Beta API decommissioned. */
+  static async listTriggers(): Promise<CalaTrigger[]> { return []; }
+  /** @deprecated */
+  static async deleteTrigger(_id: string): Promise<boolean> { return false; }
 
-  /**
-   * DELETE /beta/triggers/:id
-   */
-  static async deleteTrigger(triggerId: string): Promise<boolean> {
-    if (!this.getKey()) return false;
-    try {
-      await this.apiFetch(`${this.BETA_BASE}/triggers/${triggerId}`, { method: 'DELETE' });
-      console.log(`[Cala] Trigger deleted: ${triggerId}`);
-      return true;
-    } catch (err: any) {
-      console.warn(`[Cala] Delete trigger failed: ${err.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * PATCH /beta/triggers/:id — update trigger status (active/paused).
-   */
-  static async updateTriggerStatus(triggerId: string, status: 'active' | 'paused'): Promise<CalaTrigger | null> {
-    if (!this.getKey()) return null;
-    try {
-      console.log(`[Cala] Setting trigger ${triggerId} → ${status}`);
-      const data = await this.apiFetch(`${this.BETA_BASE}/triggers/${triggerId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
-      });
-      return data as CalaTrigger;
-    } catch (err: any) {
-      console.warn(`[Cala] Update trigger failed: ${err.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * POST /beta/triggers/:id/notifications — add a notification to a trigger.
-   */
-  static async addNotification(triggerId: string, notification: {
-    type: 'email' | 'webhook';
-    target: string;
-  }): Promise<CalaNotification | null> {
-    if (!this.getKey()) return null;
-    try {
-      console.log(`[Cala] Adding ${notification.type} notification to trigger ${triggerId}: ${notification.target}`);
-      const data = await this.apiFetch(`${this.BETA_BASE}/triggers/${triggerId}/notifications`, {
-        method: 'POST',
-        body: JSON.stringify(notification),
-      });
-      return data as CalaNotification;
-    } catch (err: any) {
-      console.warn(`[Cala] Add notification failed: ${err.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * DELETE /beta/triggers/:id/notifications/:notification_id — remove a notification.
-   */
-  static async removeNotification(triggerId: string, notificationId: string): Promise<boolean> {
-    if (!this.getKey()) return false;
-    try {
-      await this.apiFetch(`${this.BETA_BASE}/triggers/${triggerId}/notifications/${notificationId}`, {
-        method: 'DELETE',
-      });
-      console.log(`[Cala] Notification ${notificationId} removed from trigger ${triggerId}`);
-      return true;
-    } catch (err: any) {
-      console.warn(`[Cala] Remove notification failed: ${err.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Check if triggers API is available (just needs CALA_API_KEY).
-   */
   static triggersAvailable(): boolean {
     return !!this.getKey();
   }

@@ -626,70 +626,21 @@ toolRouter.delete('/cala/trigger/:id', async (req, res) => {
 });
 
 /**
- * PATCH /api/tools/cala/trigger/:id/status
- * Pause or resume a trigger.
- * Body: { status: 'active' | 'paused' }
+ * Trigger management routes — beta API decommissioned.
+ * Triggers are now created manually at https://console.cala.ai/triggers
+ * Cala fires webhook to /api/webhooks/cala-trigger → forwarded via Resend email.
  */
-toolRouter.patch('/cala/trigger/:id/status', async (req, res) => {
-  const { status } = req.body;
-  if (!status || !['active', 'paused'].includes(status)) {
-    return res.status(400).json({ error: 'status must be "active" or "paused".' });
-  }
-  try {
-    const trigger = await CalaClient.updateTriggerStatus(req.params.id, status);
-    res.json({ trigger, updated: !!trigger });
-  } catch (error: any) {
-    res.status(502).json({ error: error.message, trigger: null });
-  }
+toolRouter.patch('/cala/trigger/:id/status', (_req, res) => {
+  res.status(410).json({ error: 'Beta trigger API decommissioned. Use console.cala.ai/triggers.' });
 });
-
-/**
- * POST /api/tools/cala/trigger/:id/notification
- * Add a notification (email or webhook) to a trigger.
- * Body: { type: 'email' | 'webhook', target: string }
- */
-toolRouter.post('/cala/trigger/:id/notification', async (req, res) => {
-  const { type, target } = req.body;
-  if (!type || !target) {
-    return res.status(400).json({ error: 'Missing "type" and "target".' });
-  }
-  try {
-    const notification = await CalaClient.addNotification(req.params.id, { type, target });
-    res.status(notification ? 201 : 500).json({ notification, added: !!notification });
-  } catch (error: any) {
-    res.status(502).json({ error: error.message, notification: null });
-  }
+toolRouter.post('/cala/trigger/:id/notification', (_req, res) => {
+  res.status(410).json({ error: 'Beta trigger API decommissioned. Use console.cala.ai/triggers.' });
 });
-
-/**
- * DELETE /api/tools/cala/trigger/:trigger_id/notification/:notification_id
- * Remove a notification from a trigger.
- */
-toolRouter.delete('/cala/trigger/:trigger_id/notification/:notification_id', async (req, res) => {
-  try {
-    const ok = await CalaClient.removeNotification(req.params.trigger_id, req.params.notification_id);
-    res.json({ removed: ok });
-  } catch (error: any) {
-    res.status(502).json({ error: error.message, removed: false });
-  }
+toolRouter.delete('/cala/trigger/:trigger_id/notification/:notification_id', (_req, res) => {
+  res.status(410).json({ error: 'Beta trigger API decommissioned. Use console.cala.ai/triggers.' });
 });
-
-/**
- * POST /api/tools/cala/trigger/subscribe
- * Convenience: add an email notification to a trigger (wraps addNotification).
- * Body: { trigger_id: string, email: string }
- */
-toolRouter.post('/cala/trigger/subscribe', async (req, res) => {
-  const { trigger_id, email } = req.body;
-  if (!trigger_id || !email) {
-    return res.status(400).json({ error: 'Missing "trigger_id" and "email".' });
-  }
-  try {
-    const notification = await CalaClient.addNotification(trigger_id, { type: 'email', target: email });
-    res.json({ subscribed: !!notification, trigger_id, email, notification });
-  } catch (error: any) {
-    res.status(502).json({ error: error.message, subscribed: false });
-  }
+toolRouter.post('/cala/trigger/subscribe', (_req, res) => {
+  res.status(410).json({ error: 'Beta trigger API decommissioned. Use console.cala.ai/triggers.' });
 });
 
 /**

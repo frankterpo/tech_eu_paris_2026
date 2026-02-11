@@ -38,7 +38,7 @@ function CompanyProfile() {
   const sendFollowUp = useSendFollowUpMessage();
   const analyze = useCallTool("analyze_deal");
   const [dashboardRequested, setDashboardRequested] = useState(false);
-  const [firmType, setFirmType] = useState("early_vc");
+  const [firmType, setFirmType] = useState<string>("early_vc");
   const [aum, setAum] = useState("50-250M");
   const [showFundConfig, setShowFundConfig] = useState(false);
 
@@ -104,7 +104,7 @@ function CompanyProfile() {
       domain: p.domain,
       stage: p.growth_stage || "seed",
       geo: p.hq_country || "EU",
-      firm_type: firmType,
+      firm_type: firmType as any,
       aum,
     });
   };

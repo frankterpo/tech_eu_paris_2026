@@ -72,18 +72,22 @@ Then deploy on [app.alpic.ai](https://app.alpic.ai) (login → connect GitHub �
 
 ---
 
-## What's New (V2 — February 2026)
+## What's New (V3 — February 2026)
 
 | Change | Detail |
 |--------|--------|
-| **Auto-Resume Pipeline** | Serverless-safe: if Alpic container times out, each dashboard poll advances the simulation by one wave (analysts → associate → partner). No data loss. |
+| **Cala Trigger Webhook Relay** | Permanent Cloudflare Worker (`dealbot-cala-webhook.teamdeel.workers.dev`) receives Cala trigger-fired webhooks and forwards alerts via Resend email. Zero maintenance, free forever. |
+| **Manual Trigger Flow** | Users create triggers on [console.cala.ai/triggers](https://console.cala.ai/triggers) using queries from analyst research. Webhook relay handles the notification pipeline. |
+| **Resend Email Integration** | Styled HTML trigger alerts delivered to user-specified email addresses via Resend API. |
+| **Cursor Dark Theme** | company-profile and deal-dashboard widgets rethemed to Cursor.com color palette. |
+| **Investor Lens in Widget** | AUM + Firm Type selectors integrated directly into the company-profile card — no extra prompts. |
+| **Side-Panel Deal History** | Slide-open panel in deal-dashboard shows past + ongoing deal runs with quick navigation. |
+| **Agent Thinking UX** | Analyst dropdowns show live thinking/milestone updates during processing. |
+| **Next Steps Prompts** | Post-assessment recommendations: founder outreach mapping + Cala trigger setup. |
+| **Evidence Panel** | Inline evidence viewer with source citations, replaces old modal. |
+| **Auto-Resume Pipeline** | Serverless-safe: if Alpic times out, dashboard poll advances the simulation. No data loss. |
 | **Graceful Dify Fallback** | 401/403 from Dify → automatic stub responses. Pipeline always completes. |
 | **Double-Execution Guard** | `activeDeals` set prevents concurrent run/resume conflicts. |
-| **Investment Memo in Resume Path** | Memo auto-generated even when simulation completes across multiple requests. |
-| **Dashboard Debug Field** | `_debug.resumeResult` in structuredContent for remote troubleshooting. |
-| **ChatGPT Developer Mode** | `readOnlyHint` annotations on 22+ tools — skip confirmation dialogs. |
-| **Improved Tool Descriptions** | "Use this when…" guidance for better ChatGPT tool selection. |
-| **Competitive Intel Dedup** | No more repeated competitor entries in the dashboard feed. |
 
 ---
 
@@ -177,7 +181,8 @@ Wave 3: Partner + Memo
 | **Frontend** | React 19, Skybridge Widgets, Vite 7 | Interactive UI rendered inside ChatGPT |
 | **Backend** | Node.js, Express 5, TypeScript 5.9 | MCP server, REST API, 3-wave orchestrator |
 | **AI Orchestration** | [Dify Cloud](https://dify.ai) | Agent execution — function-calling strategy, 3-6 tool calls per agent |
-| **Knowledge Search** | [Cala AI](https://cala.ai) | 100M+ source knowledge base, entity extraction, beta triggers API |
+| **Knowledge Search** | [Cala AI](https://cala.ai) | 100M+ source knowledge base, entity extraction, trigger monitoring |
+| **Webhook Relay** | [Cloudflare Workers](https://workers.cloudflare.com) | Permanent trigger webhook → Resend email relay (`dealbot-cala-webhook.teamdeel.workers.dev`) |
 | **Company Data** | [Specter AI](https://tryspecter.com) | Company profiles, funding, competitors, people, revenue estimates |
 | **Web Research** | [Tavily AI](https://tavily.com) | Real-time web search, content extraction, site crawl, async research |
 | **Image Generation** | [fal.ai](https://fal.ai) | AI-generated investment memo cover art |
@@ -209,8 +214,11 @@ FAL_AI_API_KEY=xxx                      # fal.ai cover image generation
 RESEND_API_KEY=re_xxx                   # Resend email for triggers
 ALPIC_API_KEY=sk_xxx                    # Alpic deployment
 
-# ── Trigger System ────────────────────────────────────────
+# ── Trigger System (email alerts via Resend) ─────────────
+RESEND_API_KEY=re_xxx                   # Resend API key
+RESEND_FROM=Deal Bot <onboarding@resend.dev>  # Sender address (Resend verified)
 TRIGGER_NOTIFY_EMAIL=you@example.com    # Default trigger alert recipient
+CALA_EMAIL=you@example.com              # Cala console account email
 ```
 
 ### Graceful Degradation
@@ -276,6 +284,30 @@ ALPIC_API_KEY=your_key alpic deploy .
 
 **OpenAPI spec:** [`server/openapi-tools.json`](server/openapi-tools.json)
 
+### Cala AI Triggers + Cloudflare Worker — Permanent Monitoring
+
+Deal Bot's analysts run knowledge queries via [Cala AI](https://cala.ai) during analysis. Users can turn any query into a persistent trigger:
+
+1. **During analysis** — analysts research 8+ categories (revenue, hires, deals, partnerships, etc.) via Cala
+2. **After analysis** — the trigger-setup widget lists these queries with click-to-copy
+3. **User creates triggers** at [console.cala.ai/triggers](https://console.cala.ai/triggers) with the queries
+4. **Webhook fires** — Cala detects changes and POSTs to `https://dealbot-cala-webhook.teamdeel.workers.dev/webhook`
+5. **Email delivered** — Cloudflare Worker parses payload, sends styled HTML email via [Resend](https://resend.com)
+
+**Webhook Worker:** Zero-dependency Cloudflare Worker. Free forever (100k req/day). Deployed at:
+```
+https://dealbot-cala-webhook.teamdeel.workers.dev/webhook
+```
+
+**Deploy your own:**
+```bash
+cd webhook-worker
+npx wrangler login
+npx wrangler deploy
+npx wrangler secret put RESEND_API_KEY      # Resend API key
+npx wrangler secret put TRIGGER_NOTIFY_EMAIL # Default recipient email
+```
+
 ### fal.ai — Investment Memo Cover Art
 
 [fal.ai](https://fal.ai) generates AI cover images for the investment memo. Fires in Wave 1 (parallel with analysts) — non-blocking. If unavailable, memo renders without cover image.
@@ -326,8 +358,8 @@ Each includes: scoring weight multipliers, deal-breakers, prioritized metrics, a
 ### Tavily AI (5 tools)
 `tavily_web_search`, `tavily_extract`, `tavily_crawl`, `tavily_research`, `tavily_research_status`
 
-### Triggers (5 tools)
-`create_trigger`, `create_triggers_batch`, `list_triggers`, `check_triggers`, `delete_trigger`
+### Triggers & Monitoring (6 tools)
+`create_trigger`, `create_triggers_batch`, `list_triggers`, `check_triggers`, `delete_trigger`, `receive_trigger_webhook`
 
 ---
 
@@ -389,6 +421,11 @@ tech_eu_paris_2026/
 │   │   └── trigger-setup.tsx    # Alert configuration
 │   ├── helpers.ts               # Typed Skybridge hooks
 │   └── index.css                # 1600+ lines of widget styles
+├── webhook-worker/              # Cloudflare Worker — Cala trigger → Resend relay
+│   ├── src/worker.js            # Worker handler (zero deps, <100 lines)
+│   ├── src/index.js             # Standalone Node.js version (Railway/local)
+│   ├── wrangler.toml            # Cloudflare config
+│   └── package.json
 ├── server/openapi-tools.json    # OpenAPI 3.0 spec for Dify agents
 ├── dify-workflows/              # Dify agent YAML configs
 ├── context/                     # Architecture specs (10 docs)

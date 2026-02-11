@@ -882,9 +882,9 @@ const server = new McpServer(
 
   .registerTool("create_trigger", {
     description:
-      "Create a monitoring trigger. Monitors Cala's knowledge base for business milestones: deals closed, revenue milestones, partnerships, key hires, product launches, regulatory events, funding rounds. Sends email alerts via Resend when matching content is found.",
+      "Save a monitoring trigger locally and provide instructions to create it on Cala AI console (console.cala.ai/triggers). When Cala fires the trigger, our webhook receives it and forwards via email (Resend).",
     inputSchema: {
-      query: z.string().describe("What to monitor — e.g. 'Mistral AI major partnership', 'Stripe revenue milestone', 'OpenAI key executive hire'. Be specific."),
+      query: z.string().describe("What to monitor — e.g. 'Mistral AI major partnership', 'Stripe revenue milestone'. Be specific."),
       company: z.string().optional().describe("Company name for context"),
       email: z.string().describe("Email address to receive alerts"),
       category: z.enum(["revenue_update", "key_hire", "deal_won", "partnership", "business_model", "general"]).optional().describe("Milestone category"),
@@ -895,51 +895,32 @@ const server = new McpServer(
       const name = company ? `${company} — ${catLabel}: ${query}` : query;
       const id = `trg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
-      // Category-specific keyword enrichment for better Cala search hits
-      const categoryBoost: Record<string, string> = {
-        revenue_update: 'revenue ARR MRR growth milestone exceeded target quarterly results financial performance',
-        key_hire: 'appointed hired joined named promoted CTO CRO CFO VP SVP director executive leadership',
-        deal_won: 'contract signed deal closed customer win enterprise agreement pilot deployment chosen selected',
-        partnership: 'partnership strategic alliance integration collaboration joint venture ecosystem announced',
-        business_model: 'business model pivot pricing change new vertical market expansion strategy shift repositioning',
-        general: '',
-      };
-      const boost = categoryBoost[category || 'general'] || '';
-      const enrichedQuery = boost ? `${query} ${boost}` : query;
-
-      // Try Cala native trigger (requires JWT — may fail gracefully)
-      const calaTrigger = await CalaClient.createTrigger({ name, query, email });
-
-      // Always save locally — this is our reliable system
       const trigger = {
-        id,
-        cala_id: calaTrigger?.id || null,
-        query,
-        enrichedQuery,
-        name,
-        company: company || '',
-        email,
-        category: category || 'general',
-        frequency: 'daily',
-        status: 'active' as const,
-        source: calaTrigger ? 'cala' : 'local',
+        id, cala_id: null, query, enrichedQuery: query, name,
+        company: company || '', email, category: category || 'general',
+        frequency: 'daily', status: 'active' as const, source: 'local' as const,
         created_at: new Date().toISOString(),
-        last_checked: null as string | null,
-        last_fired: null as string | null,
-        fire_count: 0,
+        last_checked: null as string | null, last_fired: null as string | null, fire_count: 0,
       };
       PersistenceManager.saveTrigger(trigger);
 
-      const sourceNote = calaTrigger
-        ? 'Created on Cala (native monitoring + email).'
-        : 'Created locally. Use check_triggers to poll for updates + send email via Resend.';
+      const webhookUrl = 'https://tech-eu-paris-2026-0d53df71.alpic.live/api/webhooks/cala-trigger';
 
       return {
         content: [{
           type: "text" as const,
-          text: `Trigger created: "${name}" → ${email}\nID: ${id}\n${sourceNote}`,
+          text: [
+            `Trigger saved: "${name}" → ${email}`,
+            `ID: ${id}`,
+            '',
+            'To activate on Cala:',
+            '1. Go to https://console.cala.ai/triggers',
+            `2. Create trigger with query: ${query}`,
+            `3. Set webhook URL: ${webhookUrl}`,
+            `4. Cala fires → we email ${email} via Resend`,
+          ].join('\n'),
         }],
-        structuredContent: { trigger, calaResponse: calaTrigger },
+        structuredContent: { trigger, webhookUrl, calaConsoleUrl: 'https://console.cala.ai/triggers' },
       };
     } catch (err: any) {
       return { content: [{ type: "text" as const, text: `Error creating trigger: ${err.message}` }], isError: true };
@@ -1026,7 +1007,7 @@ const server = new McpServer(
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  from: 'Deal Bot <triggers@resend.dev>',
+                  from: process.env.RESEND_FROM || 'Deal Bot <onboarding@resend.dev>',
                   to: [trigger.email],
                   subject: `Alert: ${trigger.name || trigger.query}${trigger.company ? ` — ${trigger.company}` : ''}`,
                   text: alertBody,
@@ -1067,103 +1048,166 @@ const server = new McpServer(
     if (!trigger) {
       return { content: [{ type: "text" as const, text: `Trigger ${trigger_id} not found.` }], isError: true };
     }
-    // Try Cala native deletion too
     if (trigger.cala_id) await CalaClient.deleteTrigger(trigger.cala_id).catch(() => {});
     PersistenceManager.deleteTrigger(trigger_id);
     return { content: [{ type: "text" as const, text: `Trigger "${trigger.name || trigger.query}" deleted.` }] };
   })
 
-  // ── Batch trigger creation (for widget) ────────────────────────────
+  // ── Receive Cala trigger-fired webhook payload via MCP ─────────────
+  // Since Alpic doesn't expose custom HTTP routes, this tool allows
+  // processing Cala trigger-fired payloads via MCP and forwarding via Resend.
+  // Can also be used to manually test the email pipeline.
+  .registerTool("receive_trigger_webhook", {
+    description: "Process a Cala trigger-fired webhook payload. Logs the event, matches to a local trigger, and sends an email alert via Resend. Use this to forward Cala trigger notifications or to test the email pipeline.",
+    inputSchema: {
+      trigger_id: z.string().optional().describe("Cala trigger ID"),
+      trigger_name: z.string().describe("Name of the trigger that fired"),
+      query: z.string().describe("The monitored query"),
+      answer: z.string().describe("The updated answer/intelligence from Cala"),
+      email: z.string().optional().describe("Override recipient email (uses trigger's saved email if omitted)"),
+    },
+  }, async ({ trigger_id, trigger_name, query, answer, email: overrideEmail }) => {
+    try {
+      // Log event
+      PersistenceManager.startToolAction({
+        toolName: 'calaWebhook', provider: 'cala', operation: 'trigger_fired',
+        input: { trigger_id, trigger_name, query }, calledBy: 'mcp-webhook-tool',
+      });
+
+      // Find matching local trigger for saved email
+      const localTriggers = PersistenceManager.listTriggers();
+      const matched = localTriggers.find((t: any) =>
+        t.query === query || t.name === trigger_name || t.cala_id === trigger_id
+      );
+      const recipientEmail = overrideEmail || matched?.email || process.env.TRIGGER_NOTIFY_EMAIL;
+
+      if (!recipientEmail) {
+        return { content: [{ type: "text" as const, text: `Trigger "${trigger_name}" received but no email configured. Set email param or TRIGGER_NOTIFY_EMAIL.` }] };
+      }
+
+      const RESEND_KEY = process.env.RESEND_API_KEY;
+      if (!RESEND_KEY) {
+        return { content: [{ type: "text" as const, text: `Trigger "${trigger_name}" received but RESEND_API_KEY not configured.` }] };
+      }
+
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: process.env.RESEND_FROM || 'Deal Bot <onboarding@resend.dev>',
+          to: [recipientEmail],
+          subject: `Trigger Alert: ${trigger_name}`,
+          html: `
+            <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #7c5cfc;">Cala Trigger Fired</h2>
+              <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+                <tr><td style="padding: 8px; color: #666;">Trigger</td><td style="padding: 8px; font-weight: bold;">${trigger_name}</td></tr>
+                <tr><td style="padding: 8px; color: #666;">Query</td><td style="padding: 8px;">${query}</td></tr>
+                ${trigger_id ? `<tr><td style="padding: 8px; color: #666;">Trigger ID</td><td style="padding: 8px; font-size: 12px; color: #999;">${trigger_id}</td></tr>` : ''}
+              </table>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <h3 style="color: #333;">Updated Intelligence</h3>
+              <div style="background: #f8f8fc; padding: 16px; border-radius: 8px; border-left: 4px solid #7c5cfc;">
+                ${answer.replace(/\n/g, '<br/>')}
+              </div>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="color: #aaa; font-size: 11px;">Sent by Deal Bot — powered by Cala AI triggers</p>
+            </div>
+          `,
+        }),
+      });
+
+      // Update local trigger stats
+      if (matched) {
+        matched.last_fired = new Date().toISOString();
+        matched.fire_count = (matched.fire_count || 0) + 1;
+        PersistenceManager.saveTrigger(matched);
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `Trigger alert for "${trigger_name}" sent to ${recipientEmail} via Resend.` }],
+        structuredContent: { sent: true, recipient: recipientEmail, trigger_name, query },
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error forwarding trigger: ${err.message}` }], isError: true };
+    }
+  })
+
+  // ── Batch trigger creation (local + Cala console instructions) ─────
   .registerTool("create_triggers_batch", {
-    description: "Create monitoring triggers for a company the user is reviewing. Categories: revenue_update (key revenue/ARR updates), key_hire (executive hires, leadership changes), deal_won (contracts, customer wins), partnership (strategic alliances, integrations), business_model (pivots, pricing changes, new verticals). Uses Lightpanda JWT for native Cala /admin triggers when available, falls back to local persistence + Cala polling + Resend email.",
+    description: "Create monitoring triggers for a company. Saves queries locally and provides step-by-step instructions for the user to create native triggers on Cala AI console (https://console.cala.ai/triggers). When Cala fires a trigger, our webhook receives it and forwards via email (Resend).",
     inputSchema: {
       company: z.string().describe("Company name being reviewed"),
       domain: z.string().optional().describe("Company domain (e.g. mistral.ai)"),
-      email: z.string().describe("Email for alerts"),
+      email: z.string().describe("Email for trigger alerts (via Resend)"),
       categories: z.array(z.string()).describe("Milestone categories: revenue_update, key_hire, deal_won, partnership, business_model"),
-      custom_query: z.string().optional().describe("Optional custom focus (e.g. 'European expansion', 'API pricing')"),
+      custom_query: z.string().optional().describe("Optional custom focus"),
     },
   }, async ({ company, domain, email, categories, custom_query }) => {
     try {
-      // Company-specific query templates — designed for Cala knowledge base matching
-      const categoryConfig: Record<string, { label: string; queryTemplate: string; boost: string }> = {
-        revenue_update: {
-          label: 'key revenue update',
-          queryTemplate: `${company} revenue ARR growth metrics quarterly results financial performance`,
-          boost: 'revenue ARR MRR growth rate exceeded target quarterly earnings financial results annual recurring',
-        },
-        key_hire: {
-          label: 'key executive hire',
-          queryTemplate: `${company} executive hire leadership appointed CTO CRO VP director`,
-          boost: 'appointed hired joined named promoted CTO CRO CFO COO VP SVP director head of executive leadership team',
-        },
-        deal_won: {
-          label: 'key deal or contract won',
-          queryTemplate: `${company} deal closed contract signed customer win enterprise partnership agreement`,
-          boost: 'contract signed deal closed customer win enterprise agreement pilot deployment chosen selected awarded',
-        },
-        partnership: {
-          label: 'key partnership or alliance',
-          queryTemplate: `${company} partnership strategic alliance integration collaboration announced`,
-          boost: 'partnership alliance integration collaboration joint venture strategic agreement announced teamed ecosystem',
-        },
-        business_model: {
-          label: 'business model update',
-          queryTemplate: `${company} business model pricing pivot strategy new vertical expansion product direction`,
-          boost: 'business model pivot pricing change new vertical market expansion strategy shift product roadmap repositioning',
-        },
+      const categoryConfig: Record<string, { label: string; queryTemplate: string }> = {
+        revenue_update: { label: 'Key Revenue Updates', queryTemplate: `${company} revenue ARR growth metrics quarterly results financial performance` },
+        key_hire: { label: 'Key Executive Hires', queryTemplate: `${company} executive hire leadership appointed CTO CRO VP director` },
+        deal_won: { label: 'Key Deals Won', queryTemplate: `${company} deal closed contract signed customer win enterprise partnership` },
+        partnership: { label: 'Key Partnerships', queryTemplate: `${company} partnership strategic alliance integration collaboration` },
+        business_model: { label: 'Business Model Updates', queryTemplate: `${company} business model pricing pivot strategy new vertical expansion` },
       };
 
+      // Build webhook URL for Cala console
+      const webhookUrl = `https://tech-eu-paris-2026-0d53df71.alpic.live/api/webhooks/cala-trigger`;
+
       const created: any[] = [];
+      const queriesForConsole: { name: string; query: string }[] = [];
 
       for (const cat of categories) {
         const config = categoryConfig[cat];
         if (!config) continue;
 
-        const baseQuery = custom_query
-          ? `${company} ${custom_query} ${config.label}`
-          : config.queryTemplate;
+        const baseQuery = custom_query ? `${company} ${custom_query} ${config.label}` : config.queryTemplate;
         const name = `${company} — ${config.label}`;
-        const enrichedQuery = `${baseQuery} ${config.boost}`;
-        const id = `trg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-
-        // Create Cala trigger via Beta API (email notification is included in creation)
-        const calaTrigger = await CalaClient.createTrigger({ name, query: baseQuery, email });
+        const id = `trg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
         const trigger = {
-          id,
-          cala_id: calaTrigger?.id || null,
-          query: baseQuery,
-          enrichedQuery,
-          name,
-          company,
-          domain: domain || '',
-          email,
-          category: cat,
-          frequency: 'daily',
-          status: 'active' as const,
-          source: calaTrigger ? 'cala' : 'local',
+          id, cala_id: null, query: baseQuery, enrichedQuery: baseQuery, name, company,
+          domain: domain || '', email, category: cat, frequency: 'daily',
+          status: 'active' as const, source: 'local' as const,
           created_at: new Date().toISOString(),
-          last_checked: null as string | null,
-          last_fired: null as string | null,
-          fire_count: 0,
+          last_checked: null as string | null, last_fired: null as string | null, fire_count: 0,
         };
         PersistenceManager.saveTrigger(trigger);
         created.push(trigger);
+        queriesForConsole.push({ name, query: baseQuery });
       }
 
-      const calaCount = created.filter(t => t.source === 'cala').length;
-      const localCount = created.filter(t => t.source === 'local').length;
-      const lines = created.map(t =>
-        `• ${(t.category || '').replace(/_/g, ' ')} — ${t.source === 'cala' ? '⚡ Cala native' : '📦 Local + polling'}`
-      );
+      // Build user-facing instructions
+      const queryList = queriesForConsole.map((q, i) =>
+        `${i + 1}. "${q.name}"\n   Query: ${q.query}`
+      ).join('\n\n');
+
+      const instructions = [
+        `Saved ${created.length} triggers locally for ${company} → ${email}`,
+        '',
+        'To activate native Cala monitoring:',
+        '1. Go to https://console.cala.ai/triggers',
+        '2. Create a trigger for each query below',
+        '3. Set webhook URL to:',
+        `   ${webhookUrl}`,
+        '4. When Cala detects changes, it fires the webhook',
+        `5. We forward alerts to ${email} via Resend`,
+        '',
+        '── Queries to paste into Cala Console ──',
+        '',
+        queryList,
+      ].join('\n');
 
       return {
-        content: [{
-          type: "text" as const,
-          text: `Created ${created.length} triggers for ${company} → ${email}\n${lines.join('\n')}\n\n${calaCount > 0 ? `${calaCount} native Cala triggers (auto-monitored).` : ''}${localCount > 0 ? ` ${localCount} local triggers — use check_triggers to poll.` : ''}`,
-        }],
-        structuredContent: { triggers: created, company, email, calaCount, localCount },
+        content: [{ type: "text" as const, text: instructions }],
+        structuredContent: {
+          triggers: created, company, email,
+          webhookUrl,
+          calaConsoleUrl: 'https://console.cala.ai/triggers',
+          queriesForConsole,
+        },
       };
     } catch (err: any) {
       return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };

@@ -27,17 +27,20 @@ interface TriggerSetupData {
   specterProfile: any | null;
 }
 
+const WEBHOOK_URL = "https://tech-eu-paris-2026-0d53df71.alpic.live/api/webhooks/cala-trigger";
+const CALA_CONSOLE_URL = "https://console.cala.ai/triggers";
+
 /* ── Widget ────────────────────────────────────────────────────────── */
 function TriggerSetup() {
   const { isSuccess, output, isPending, input } = useToolInfo<"trigger-setup">();
   const sendFollowUp = useSendFollowUpMessage();
   const batchCreate = useCallTool("create_triggers_batch");
-  const checkTriggers = useCallTool("check_triggers");
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [email, setEmail] = useState("");
   const [customQuery, setCustomQuery] = useState("");
   const [created, setCreated] = useState(false);
+  const [copiedQuery, setCopiedQuery] = useState<string | null>(null);
 
   const data = output as TriggerSetupData | undefined;
 
@@ -64,11 +67,8 @@ function TriggerSetup() {
   };
 
   const selectAll = () => {
-    if (selected.size === data.categories.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(data.categories.map(c => c.id)));
-    }
+    if (selected.size === data.categories.length) setSelected(new Set());
+    else setSelected(new Set(data.categories.map(c => c.id)));
   };
 
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -85,6 +85,13 @@ function TriggerSetup() {
     });
   };
 
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedQuery(label);
+      setTimeout(() => setCopiedQuery(null), 2000);
+    }).catch(() => {});
+  };
+
   const createdData = batchCreate.data?.structuredContent as any;
 
   /* ── Render ──────────────────────────────────────────────────── */
@@ -98,98 +105,82 @@ function TriggerSetup() {
         <div>
           <div className="trg-title">Monitor {data.company}</div>
           <div className="trg-subtitle">
-            Track key milestones for {data.company}{data.domain ? ` (${data.domain})` : ""}.
-            {data.calaTriggersAvailable
-              ? " Triggers are created natively on Cala's Beta API."
-              : " Cala API key required — set CALA_API_KEY in .env."}
+            Track key milestones. Triggers created via{" "}
+            <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#7c5cfc" }}>
+              Cala AI Console
+            </a>{" "}
+            — alerts forwarded to your email via Resend.
           </div>
         </div>
-        {data.calaTriggersAvailable && (
-          <span className="trg-jwt-badge" title="Cala Beta Triggers API active">⚡ API</span>
-        )}
       </div>
 
-      {/* Company context card (if Specter profile available) */}
-      {data.specterProfile && (
-        <div className="trg-company-ctx">
-          {data.specterProfile.logo_url && (
-            <img src={data.specterProfile.logo_url} alt="" className="trg-company-logo" />
-          )}
-          <div className="trg-company-info">
-            <span className="trg-company-name">{data.specterProfile.name || data.company}</span>
-            <span className="trg-company-meta">
-              {data.specterProfile.growth_stage || ""}
-              {data.specterProfile.hq_country ? ` · ${data.specterProfile.hq_country}` : ""}
-              {data.specterProfile.industries?.length ? ` · ${data.specterProfile.industries.slice(0, 2).join(", ")}` : ""}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Existing Triggers */}
-      {data.existingTriggers.length > 0 && (
-        <div className="trg-existing">
-          <div className="trg-section-label">
-            Active Triggers ({data.existingTriggers.length})
-          </div>
-          <div className="trg-existing-list">
-            {data.existingTriggers.map((t, i) => (
-              <div key={t.id || i} className="trg-existing-item">
-                <span className="trg-existing-cat">
-                  {data.categories.find(c => c.id === t.category)?.icon || "📌"}{" "}
-                  {(t.name || t.query || '').slice(0, 40)}
-                </span>
-                <span className="trg-existing-email">{t.email}</span>
-                <span className="trg-existing-source">
-                  {t.source === 'cala' ? '⚡ Cala' : '📦 Local'}
-                </span>
-              </div>
-            ))}
-          </div>
-          <button
-            className="trg-check-btn"
-            onClick={() => checkTriggers.callTool({})}
-            disabled={checkTriggers.isPending}
-          >
-            {checkTriggers.isPending ? "Checking..." : "⚡ Check All Now"}
-          </button>
-          {checkTriggers.isSuccess && (
-            <div className="trg-check-result">✅ Check complete — see chat for results</div>
-          )}
-        </div>
-      )}
-
-      {/* ── Success State ────────────────────────────────────────── */}
+      {/* ── Success State ──────────────────────────────────────── */}
       {created && createdData ? (
         <div className="trg-success">
           <div className="trg-success-icon">✅</div>
           <div className="trg-success-title">
-            {createdData.triggers?.length || 0} Triggers Created
+            {createdData.triggers?.length || 0} Triggers Saved
           </div>
           <div className="trg-success-subtitle">
-            Monitoring <b>{data.company}</b> → alerts to <b>{createdData.email}</b>
+            Alerts for <b>{data.company}</b> → <b>{createdData.email}</b>
           </div>
-          <div className="trg-success-list">
-            {(createdData.triggers || []).map((t: any) => (
-              <div key={t.id} className="trg-success-item">
-                {data.categories.find(c => c.id === t.category)?.icon || "📌"}{" "}
-                {(t.category || '').replace(/_/g, " ")}
-                <span className="trg-success-source">
-                  {t.source === 'cala' ? 'Cala native' : 'Local + Resend'}
-                </span>
-              </div>
-            ))}
+
+          {/* ── Step-by-step Cala Console Instructions ──────── */}
+          <div className="trg-instructions">
+            <div className="trg-instructions-title">Set up native Cala triggers:</div>
+
+            <div className="trg-step">
+              <span className="trg-step-num">1</span>
+              <span>
+                Open{" "}
+                <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#7c5cfc", fontWeight: 600 }}>
+                  console.cala.ai/triggers
+                </a>
+              </span>
+            </div>
+
+            <div className="trg-step">
+              <span className="trg-step-num">2</span>
+              <span>Create a trigger for each query below (click to copy):</span>
+            </div>
+
+            <div className="trg-query-list">
+              {(createdData.queriesForConsole || []).map((q: any, i: number) => (
+                <button
+                  key={i}
+                  className="trg-query-item"
+                  onClick={() => copyToClipboard(q.query, q.name)}
+                  title="Click to copy query"
+                >
+                  <span className="trg-query-name">{q.name}</span>
+                  <span className="trg-query-text">{q.query}</span>
+                  <span className="trg-query-copy">
+                    {copiedQuery === q.name ? "✓ Copied" : "Copy"}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="trg-step">
+              <span className="trg-step-num">3</span>
+              <span>Add webhook notification with this URL:</span>
+            </div>
+            <button
+              className="trg-webhook-url"
+              onClick={() => copyToClipboard(WEBHOOK_URL, "webhook")}
+              title="Click to copy webhook URL"
+            >
+              <code>{WEBHOOK_URL}</code>
+              <span className="trg-query-copy">
+                {copiedQuery === "webhook" ? "✓ Copied" : "Copy"}
+              </span>
+            </button>
+
+            <div className="trg-step">
+              <span className="trg-step-num">4</span>
+              <span>When Cala detects changes, we email <b>{createdData.email}</b> via Resend</span>
+            </div>
           </div>
-          <div className="trg-success-note">
-            Ask the AI to <b>check triggers</b> anytime, or triggers will be checked on next interaction.
-          </div>
-          <button
-            className="trg-check-btn"
-            onClick={() => checkTriggers.callTool({})}
-            disabled={checkTriggers.isPending}
-          >
-            {checkTriggers.isPending ? "Checking..." : "⚡ Run First Check Now"}
-          </button>
         </div>
       ) : (
         <>
@@ -214,14 +205,6 @@ function TriggerSetup() {
                 </button>
               ))}
             </div>
-            {selected.size > 0 && (
-              <div className="trg-selected-desc">
-                {Array.from(selected).map(id => {
-                  const cat = data.categories.find(c => c.id === id);
-                  return cat ? `${cat.icon} ${cat.desc}` : id;
-                }).join(" · ")}
-              </div>
-            )}
           </div>
 
           {/* ── Custom query (optional) ───────────────────────── */}
@@ -257,18 +240,19 @@ function TriggerSetup() {
             {batchCreate.isPending ? (
               <>
                 <span className="cala-pulse" />
-                Creating {selected.size} triggers...
+                Setting up {selected.size} triggers...
               </>
             ) : (
-              `Create ${selected.size} Trigger${selected.size !== 1 ? "s" : ""} →`
+              `Set Up ${selected.size} Trigger${selected.size !== 1 ? "s" : ""} →`
             )}
           </button>
 
           <div className="trg-powered">
-            {data.calaTriggersAvailable
-              ? <>Native triggers via <b>Cala.ai</b> Beta API</>
-              : <>Monitored via <b>Cala.ai</b> knowledge base · Alerts via <b>Resend</b></>
-            }
+            Triggers via{" "}
+            <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#7c5cfc" }}>
+              <b>Cala.ai</b>
+            </a>{" "}
+            · Alerts via <b>Resend</b>
           </div>
         </>
       )}

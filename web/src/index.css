@@ -1589,6 +1589,108 @@ body {
   margin-top: 2px;
 }
 
+/* ── Trigger Instructions (Cala Console flow) ──────────────────── */
+.trg-instructions {
+  margin-top: 12px;
+  background: #13131d;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  padding: 12px;
+}
+.trg-instructions-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e4e4e7;
+  margin-bottom: 10px;
+}
+.trg-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #a1a1aa;
+  line-height: 1.4;
+}
+.trg-step a { text-decoration: none; }
+.trg-step a:hover { text-decoration: underline; }
+.trg-step-num {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #7c5cfc;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.trg-query-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 10px 26px;
+}
+.trg-query-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #1e1e2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  position: relative;
+  transition: border-color 0.15s;
+}
+.trg-query-item:hover {
+  border-color: #7c5cfc;
+}
+.trg-query-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e4e4e7;
+}
+.trg-query-text {
+  font-size: 10px;
+  color: #71717a;
+  font-family: monospace;
+  word-break: break-all;
+}
+.trg-query-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 9px;
+  color: #7c5cfc;
+  font-weight: 600;
+}
+.trg-webhook-url {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1e1e2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 4px 0 10px 26px;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s;
+  width: calc(100% - 26px);
+  text-align: left;
+}
+.trg-webhook-url:hover { border-color: #7c5cfc; }
+.trg-webhook-url code {
+  font-size: 9px;
+  color: #a1a1aa;
+  word-break: break-all;
+  flex: 1;
+}
+
 /* Check button */
 .trg-check-btn {
   padding: 8px 16px;

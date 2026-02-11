@@ -287,14 +287,13 @@ app.get("/api/deals/:id/trigger-suggestions", (req: Request, res: Response) => {
 
 /**
  * POST /api/deals/:id/triggers/activate
- * Body: { categories: string[], email?: string, webhook_url?: string }
+ * Body: { categories: string[], email?: string }
  *
- * Takes selected category IDs from trigger suggestions, creates real Cala Beta triggers
- * for each, and attaches notifications (email + webhook).
+ * Saves triggers locally and returns queries for the user to create on Cala console.
  */
 app.post("/api/deals/:id/triggers/activate", async (req: Request, res: Response) => {
   const dealId = String(req.params.id);
-  const { categories, email, webhook_url } = req.body;
+  const { categories, email } = req.body;
 
   if (!categories || !Array.isArray(categories) || categories.length === 0) {
     return res.status(400).json({ error: 'Provide "categories" array (e.g., ["revenue_updates", "key_hires"])' });
@@ -305,71 +304,47 @@ app.post("/api/deals/:id/triggers/activate", async (req: Request, res: Response)
     return res.status(404).json({ error: 'No trigger suggestions found for this deal. Run the analysis first.' });
   }
 
-  // Build the server's webhook URL for receiving Cala trigger notifications
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
-  const webhookTarget = webhook_url || `${baseUrl}/api/webhooks/cala-trigger`;
-
+  const webhookUrl = 'https://tech-eu-paris-2026-0d53df71.alpic.live/api/webhooks/cala-trigger';
   const results: any[] = [];
-  const errors: string[] = [];
+  const queriesForConsole: { name: string; query: string }[] = [];
 
   for (const catId of categories) {
     const suggestion = suggestions.find((s: any) => s.category === catId);
-    if (!suggestion) {
-      errors.push(`Category "${catId}" not found in suggestions`);
-      continue;
-    }
+    if (!suggestion) continue;
 
-    try {
-      const trigger = await CalaClient.createTrigger({
-        name: suggestion.label,
-        query: suggestion.query,
-        email,
-        webhookUrl: webhookTarget,
-      });
-
-      if (trigger) {
-        // Mark suggestion as activated + save trigger to DB
-        PersistenceManager.activateTriggerSuggestion(suggestion.id, trigger.id);
-        PersistenceManager.saveTrigger({
-          id: trigger.id,
-          deal_id: dealId,
-          cala_id: trigger.id,
-          name: trigger.name,
-          query: trigger.query,
-          answer_baseline: trigger.answer,
-          category: catId,
-          company: PersistenceManager.getState(dealId)?.deal_input.name,
-          email,
-          webhookUrl: webhookTarget,
-          status: 'active',
-        });
-        results.push({ category: catId, label: suggestion.label, trigger_id: trigger.id, status: 'active' });
-      } else {
-        errors.push(`Failed to create trigger for "${catId}"`);
-      }
-    } catch (err: any) {
-      errors.push(`${catId}: ${err.message}`);
-    }
+    const id = `trg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    PersistenceManager.activateTriggerSuggestion(suggestion.id, id);
+    PersistenceManager.saveTrigger({
+      id, deal_id: dealId, cala_id: null, name: suggestion.label,
+      query: suggestion.query, category: catId,
+      company: PersistenceManager.getState(dealId)?.deal_input?.name,
+      email, status: 'active', source: 'local',
+      created_at: new Date().toISOString(),
+    });
+    results.push({ category: catId, label: suggestion.label, id });
+    queriesForConsole.push({ name: suggestion.label, query: suggestion.query });
   }
 
   res.json({
     deal_id: dealId,
     activated: results,
-    errors,
     total_activated: results.length,
-    webhook_url: webhookTarget,
+    webhookUrl,
+    calaConsoleUrl: 'https://console.cala.ai/triggers',
+    queriesForConsole,
+    instructions: 'Create triggers at console.cala.ai/triggers with these queries. Set webhook URL to receive alerts.',
   });
 });
 
 /**
  * POST /api/deals/:id/triggers/activate-all
- * Body: { email?: string, webhook_url?: string }
+ * Body: { email?: string }
  *
- * Activates ALL trigger suggestions that have data (has_data = true).
+ * Saves ALL trigger suggestions locally with Cala console instructions.
  */
 app.post("/api/deals/:id/triggers/activate-all", async (req: Request, res: Response) => {
   const dealId = String(req.params.id);
-  const { email, webhook_url } = req.body;
+  const { email } = req.body;
 
   const suggestions = PersistenceManager.getTriggerSuggestions(dealId)
     .filter((s: any) => s.has_data && !s.activated);
@@ -378,92 +353,111 @@ app.post("/api/deals/:id/triggers/activate-all", async (req: Request, res: Respo
     return res.status(404).json({ error: 'No activatable trigger suggestions found.' });
   }
 
-  const categories = suggestions.map((s: any) => s.category);
-  // Delegate to the regular activate endpoint logic
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
-  const webhookTarget = webhook_url || `${baseUrl}/api/webhooks/cala-trigger`;
-
+  const webhookUrl = 'https://tech-eu-paris-2026-0d53df71.alpic.live/api/webhooks/cala-trigger';
   const results: any[] = [];
+  const queriesForConsole: { name: string; query: string }[] = [];
+
   for (const suggestion of suggestions) {
-    try {
-      const trigger = await CalaClient.createTrigger({
-        name: suggestion.label,
-        query: suggestion.query,
-        email,
-        webhookUrl: webhookTarget,
-      });
-      if (trigger) {
-        PersistenceManager.activateTriggerSuggestion(suggestion.id, trigger.id);
-        PersistenceManager.saveTrigger({
-          id: trigger.id, deal_id: dealId, cala_id: trigger.id,
-          name: trigger.name, query: trigger.query, answer_baseline: trigger.answer,
-          category: suggestion.category, company: PersistenceManager.getState(dealId)?.deal_input.name,
-          email, webhookUrl: webhookTarget, status: 'active',
-        });
-        results.push({ category: suggestion.category, label: suggestion.label, trigger_id: trigger.id });
-      }
-    } catch { /* swallow — best effort */ }
+    const id = `trg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    PersistenceManager.activateTriggerSuggestion(suggestion.id, id);
+    PersistenceManager.saveTrigger({
+      id, deal_id: dealId, cala_id: null, name: suggestion.label,
+      query: suggestion.query, category: suggestion.category,
+      company: PersistenceManager.getState(dealId)?.deal_input?.name,
+      email, status: 'active', source: 'local',
+      created_at: new Date().toISOString(),
+    });
+    results.push({ category: suggestion.category, label: suggestion.label, id });
+    queriesForConsole.push({ name: suggestion.label, query: suggestion.query });
   }
 
   res.json({
     deal_id: dealId,
     activated: results,
     total_activated: results.length,
-    total_categories: categories.length,
-    webhook_url: webhookTarget,
+    total_categories: suggestions.length,
+    webhookUrl,
+    calaConsoleUrl: 'https://console.cala.ai/triggers',
+    queriesForConsole,
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// WEBHOOK RECEIVER — Cala trigger notifications
-// When Cala detects a change, it POSTs here. We log + optionally forward via Resend.
+// WEBHOOK RECEIVER — Cala trigger-fired notifications
+//
+// Cala console triggers POST this payload when a monitored query changes:
+// { type: "string", timestamp: "ISO", data: { trigger_id, trigger_name, query, answer } }
+//
+// Flow: Cala fires → this endpoint → log + forward via Resend email
+// User configures this URL as webhook target in Cala console.
 // ═══════════════════════════════════════════════════════════════════════
 
 app.post("/api/webhooks/cala-trigger", async (req: Request, res: Response) => {
   const payload = req.body;
   console.log(`[Webhook] Cala trigger fired:`, JSON.stringify(payload).slice(0, 500));
 
-  // Log as a tool action
+  // Parse the Cala trigger-fired schema
+  const data = payload.data || payload; // handle both nested and flat
+  const triggerId = data.trigger_id || '';
+  const triggerName = data.trigger_name || data.name || 'Unknown trigger';
+  const triggerQuery = data.query || '';
+  const answer = data.answer || '';
+  const timestamp = payload.timestamp || new Date().toISOString();
+
+  // Log as tool action
   PersistenceManager.startToolAction({
     toolName: 'calaWebhook', provider: 'cala', operation: 'trigger_fired',
-    input: payload, calledBy: 'cala-webhook',
+    input: { trigger_id: triggerId, trigger_name: triggerName, query: triggerQuery, timestamp },
+    calledBy: 'cala-webhook',
   });
 
-  // Attempt to forward via Resend if configured
-  const resendKey = process.env.RESEND_API_KEY;
-  const notifyEmail = process.env.TRIGGER_NOTIFY_EMAIL;
-  if (resendKey && notifyEmail) {
-    try {
-      const triggerName = payload.name || payload.trigger_name || 'Unknown trigger';
-      const triggerQuery = payload.query || '';
-      const newAnswer = payload.answer || payload.new_answer || 'No details available';
+  // Find matching local trigger to get the user's email
+  const localTriggers = PersistenceManager.listTriggers();
+  const matchedTrigger = localTriggers.find((t: any) =>
+    t.query === triggerQuery || t.name === triggerName || t.cala_id === triggerId
+  );
+  const recipientEmail = matchedTrigger?.email || process.env.TRIGGER_NOTIFY_EMAIL;
 
+  // Forward via Resend
+  const resendKey = process.env.RESEND_API_KEY;
+  if (resendKey && recipientEmail) {
+    try {
       await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from: process.env.RESEND_FROM || 'Deal Bot <alerts@updates.dealbot.ai>',
-          to: [notifyEmail],
-          subject: `🔔 Trigger Alert: ${triggerName}`,
+          from: process.env.RESEND_FROM || 'Deal Bot <onboarding@resend.dev>',
+          to: [recipientEmail],
+          subject: `Trigger Alert: ${triggerName}`,
           html: `
-            <h2>Cala Trigger Fired</h2>
-            <p><strong>Trigger:</strong> ${triggerName}</p>
-            <p><strong>Query:</strong> ${triggerQuery}</p>
-            <hr/>
-            <h3>Updated Intelligence</h3>
-            <p>${newAnswer}</p>
-            <hr/>
-            <p style="color: #888; font-size: 12px;">Sent by Deal Bot trigger system</p>
+            <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #7c5cfc;">Cala Trigger Fired</h2>
+              <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+                <tr><td style="padding: 8px; color: #666;">Trigger</td><td style="padding: 8px; font-weight: bold;">${triggerName}</td></tr>
+                <tr><td style="padding: 8px; color: #666;">Query</td><td style="padding: 8px;">${triggerQuery}</td></tr>
+                <tr><td style="padding: 8px; color: #666;">Trigger ID</td><td style="padding: 8px; font-size: 12px; color: #999;">${triggerId}</td></tr>
+                <tr><td style="padding: 8px; color: #666;">Fired at</td><td style="padding: 8px;">${new Date(timestamp).toLocaleString()}</td></tr>
+              </table>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <h3 style="color: #333;">Updated Intelligence</h3>
+              <div style="background: #f8f8fc; padding: 16px; border-radius: 8px; border-left: 4px solid #7c5cfc;">
+                ${answer.replace(/\n/g, '<br/>')}
+              </div>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="color: #aaa; font-size: 11px;">Sent by Deal Bot — powered by Cala AI triggers</p>
+            </div>
           `,
         }),
       });
-      console.log(`[Webhook] Forwarded trigger alert to ${notifyEmail} via Resend`);
+      console.log(`[Webhook] Forwarded trigger alert to ${recipientEmail} via Resend`);
     } catch (err: any) {
       console.warn(`[Webhook] Resend forward failed: ${err.message}`);
     }
+  } else {
+    console.warn(`[Webhook] No Resend key or recipient email — trigger logged but not forwarded`);
   }
 
-  res.json({ received: true, ts: new Date().toISOString() });
+  res.json({ received: true, trigger_id: triggerId, forwarded_to: recipientEmail || null, ts: new Date().toISOString() });
 });
 
 app.listen(port, () => {
