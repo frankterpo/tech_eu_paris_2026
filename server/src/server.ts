@@ -129,7 +129,6 @@ const server = new McpServer(
       annotations: { readOnlyHint: true },
       _meta: {
         "openai/widgetAccessible": true,
-        "openai/requiresConfirmation": true,
         "openai/toolInvocation/invoking": "Loading deal analysis...",
         "openai/toolInvocation/invoked": "Deal dashboard ready",
       },
@@ -1469,12 +1468,11 @@ const server = new McpServer(
       // Check if deal already exists for this company
       const existing = PersistenceManager.findDealByNameOrDomain(domain || name);
       if (existing) {
-        // Kick off simulation (fire-and-forget, 3s head start) then return
+        // Kick off simulation (fire-and-forget) then return IMMEDIATELY.
         // The deal-dashboard's resumeIfStalled will advance it on each poll.
         Orchestrator.runSimulation(existing.id).catch((err) =>
           console.error(`Sim error for ${existing.id}: ${err.message}`)
         );
-        await new Promise(r => setTimeout(r, 3000)); // brief head start
         return {
           content: [{
             type: "text" as const,
@@ -1501,12 +1499,12 @@ const server = new McpServer(
         },
       });
 
-      // Kick off simulation (fire-and-forget, 3s head start) then return FAST
-      // so the widget can immediately open the dashboard and show agents running live.
+      // Kick off simulation (fire-and-forget) then return IMMEDIATELY.
+      // The deal-dashboard widget will open instantly and its resumeIfStalled
+      // will advance the simulation on each poll cycle.
       Orchestrator.runSimulation(dealId).catch((err) =>
         console.error(`Sim error for ${dealId}: ${err.message}`)
       );
-      await new Promise(r => setTimeout(r, 3000)); // brief head start
 
       return {
         content: [{
