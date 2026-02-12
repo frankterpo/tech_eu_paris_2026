@@ -30,7 +30,18 @@ const server = new McpServer(
     {
       description:
         "Research a company — shows profile card with funding, traction, team, and market intelligence",
-      _meta: { ui: { prefersBorder: false } },
+      _meta: {
+        ui: {
+          prefersBorder: false,
+          csp: {
+            resourceDomains: [
+              "https://logo.clearbit.com",
+              "https://img.logo.dev",
+              "https://cdn.brandfetch.io",
+            ],
+          },
+        },
+      },
     },
     {
       description:
@@ -100,7 +111,18 @@ const server = new McpServer(
     {
       description:
         "Deal analysis dashboard with rubric scores, evidence, hypotheses, and decision gate",
-      _meta: { ui: { prefersBorder: false } },
+      _meta: {
+        ui: {
+          prefersBorder: false,
+          csp: {
+            resourceDomains: [
+              "https://logo.clearbit.com",
+              "https://img.logo.dev",
+              "https://cdn.brandfetch.io",
+            ],
+          },
+        },
+      },
     },
     {
       description:
@@ -131,12 +153,13 @@ const server = new McpServer(
 
       // ── AUTO-RESUME: On serverless, background promises die. Each dashboard
       // poll advances the stalled simulation by one wave (analysts→associate→partner).
-      // Racing against Alpic's ~30s function timeout.
+      // Racing against Alpic's ~30s function timeout — keep this well under 15s
+      // to leave room for cold start + response serialization.
       let resumeResult = 'skipped';
       try {
         const raceResult = await Promise.race([
           Orchestrator.resumeIfStalled(deal_id),
-          new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 20000))
+          new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 8000))
         ]);
         resumeResult = raceResult || 'done';
       } catch (err: any) {
@@ -208,11 +231,28 @@ const server = new McpServer(
         textParts.push(`Decision: ${dg.decision} | Avg: ${avg}/100`);
       }
 
+      // ── Slim payload: strip traction_metrics (huge), limit evidence snippets ──
+      const slimProfile = state.company_profile
+        ? { ...state.company_profile, traction_metrics: undefined }
+        : null;
+      const slimEvidence = (state.evidence || []).map((e: any) => ({
+        evidence_id: e.evidence_id,
+        title: e.title,
+        snippet: typeof e.snippet === 'string' ? e.snippet.slice(0, 300) : e.snippet,
+        source: e.source,
+        url: e.url,
+      }));
+
       return {
         content: [{ type: "text" as const, text: textParts.join("\n") }],
         structuredContent: {
           deal_id,
-          ...state,
+          deal_input: state.deal_input,
+          evidence: slimEvidence,
+          hypotheses: state.hypotheses || [],
+          rubric: state.rubric || {},
+          decision_gate: state.decision_gate || {},
+          company_profile: slimProfile,
           pipeline: {
             analysts,
             associate: {
