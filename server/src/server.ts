@@ -45,7 +45,7 @@ const server = new McpServer(
     },
     {
       description:
-        "STEP 1: Research a company. Use this when the user mentions any company name or domain. Returns instant profile from Specter with funding, traction, and team data. IMPORTANT: After showing this widget, do NOT add any text or commentary — the widget is self-contained with its own 'Process Deal' button. Only speak if the user explicitly asks a question.",
+        "STEP 1: Research a company. Use this when the user mentions any company name or domain. Returns an interactive profile card with funding, traction, and team data. CRITICAL: This is a STANDALONE step — do NOT call analyze_deal or deal-dashboard after this. The widget has its own 'Process Deal' button that the user will click when ready. Only speak if the user explicitly asks a question.",
       inputSchema: {
         domain: z.string().describe("Company domain (e.g. mistral.ai, stripe.com)"),
         name: z.string().optional().describe("Company name (optional)"),
@@ -78,9 +78,9 @@ const server = new McpServer(
         // Check if deal already exists
         const existingDeal = PersistenceManager.findDealByNameOrDomain(domain);
         if (existingDeal) {
-          textParts.push(`\nExisting deal found: ${existingDeal.id} (${existingDeal.status || 'in_progress'}). Show deal-dashboard with deal_id="${existingDeal.id}" to view results.`);
+          textParts.push(`\nExisting deal found (${existingDeal.status || 'in_progress'}). The widget has a "View Dashboard" button for the user.`);
         } else {
-          textParts.push(`\nNo deal exists yet. Ask the user if they want to run a full deal analysis — if yes, call analyze_deal with name="${profile.name}" and domain="${domain}".`);
+          textParts.push(`\nNo deal exists yet. The widget has a "Process Deal" button — wait for the user to click it.`);
         }
       } else {
         textParts.push(`Company not found for domain: ${domain}`);
@@ -126,7 +126,7 @@ const server = new McpServer(
     },
     {
       description:
-        "STEP 3: Show the live deal analysis dashboard. Use this IMMEDIATELY after analyze_deal returns a deal_id, or when the user says 'show dashboard', 'check progress', or 'show deal'. The dashboard auto-refreshes with live analyst progress, rubric scores, and investment decision. IMPORTANT: After showing this widget, do NOT add any text or commentary — the dashboard is self-updating. Only speak if the user explicitly asks a question.",
+        "Show the live deal analysis dashboard. ONLY call this when: (a) the user explicitly says 'show dashboard', 'check progress', or 'show deal', OR (b) a widget follow-up message asks you to show it. NEVER call this right after company-profile — wait for the user to click 'Process Deal' first. The dashboard shows live agent progress, rubric scores, and investment decision. After showing, do NOT add commentary — the dashboard is self-updating.",
       inputSchema: {
         deal_id: z.string().describe("Deal ID (from analyze_deal, create_deal, lookup_deal, or list_deals)"),
       },
@@ -809,7 +809,7 @@ const server = new McpServer(
   })
 
   .registerTool("create_deal", {
-    description: "Create a deal analysis session WITHOUT running it. Prefer analyze_deal instead (which creates AND runs in one step). Only use create_deal if you need to set detailed deal terms (ticket_size, valuation, etc.) before running. Returns a deal_id — call run_deal next, then show deal-dashboard.",
+    description: "Create a deal analysis session WITHOUT running it. Prefer analyze_deal instead (which creates AND runs in one step). Only use create_deal if you need to set detailed deal terms (ticket_size, valuation, etc.) before running. Returns a deal_id.",
     inputSchema: {
       name: z.string().describe("Company name"),
       domain: z.string().describe("Company domain"),
@@ -880,7 +880,7 @@ const server = new McpServer(
 
   .registerTool("run_deal", {
     description:
-      "Start/re-run the simulation for an existing deal. Prefer analyze_deal for new deals (creates + runs in one step). After calling this, IMMEDIATELY show deal-dashboard with the same deal_id.",
+      "Start/re-run the simulation for an existing deal. Prefer analyze_deal for new deals (creates + runs in one step).",
     inputSchema: {
       deal_id: z.string().describe("Deal ID from create_deal"),
     },
@@ -1451,7 +1451,7 @@ const server = new McpServer(
 
   .registerTool("analyze_deal", {
     description:
-      "STEP 2: Run full deal analysis with 3 AI analysts, associate synthesis, and partner decision. Use this when the user says 'analyze', 'process deal', 'run analysis', 'evaluate this company', or clicks Process Deal. Returns a deal_id. CRITICAL: After calling this, IMMEDIATELY call deal-dashboard with the returned deal_id to show the live dashboard. Do NOT add any text between analyze_deal and deal-dashboard — just chain the two calls.",
+      "Run full deal analysis with 3 AI analysts, associate synthesis, and partner decision. Use this ONLY when a widget follow-up message triggers it (from the 'Process Deal' button). Returns a deal_id. The widget will automatically open the deal-dashboard — do NOT call deal-dashboard yourself after this.",
     inputSchema: {
       name: z.string().describe("Company name"),
       domain: z.string().describe("Company domain (e.g. mistral.ai)"),
@@ -1466,21 +1466,18 @@ const server = new McpServer(
       // Check if deal already exists for this company
       const existing = PersistenceManager.findDealByNameOrDomain(domain || name);
       if (existing) {
-        // Race simulation against 25s timeout — Alpic has ~30s limit
-        const simP = Orchestrator.runSimulation(existing.id).catch((err) =>
+        // Kick off simulation (fire-and-forget, 3s head start) then return
+        // The deal-dashboard's resumeIfStalled will advance it on each poll.
+        Orchestrator.runSimulation(existing.id).catch((err) =>
           console.error(`Sim error for ${existing.id}: ${err.message}`)
         );
-        const tOut = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 25000));
-        const res = await Promise.race([simP.then(() => 'done' as const), tOut]);
-        const done = res !== 'timeout';
+        await new Promise(r => setTimeout(r, 3000)); // brief head start
         return {
           content: [{
             type: "text" as const,
-            text: done
-              ? `Deal analysis complete for ${name}.\nDeal ID: ${existing.id}\n\nNow show the deal-dashboard widget with deal_id="${existing.id}".`
-              : `Deal analysis running for ${name}.\nDeal ID: ${existing.id}\n\nShow deal-dashboard widget with deal_id="${existing.id}" to track live progress.`,
+            text: `Deal analysis kicked off for ${name}.\nDeal ID: ${existing.id}`,
           }],
-          structuredContent: { deal_id: existing.id, name: existing.name, domain: existing.domain, rerun: true, completed: done, in_progress: !done },
+          structuredContent: { deal_id: existing.id, name: existing.name, domain: existing.domain, rerun: true, in_progress: true },
         };
       }
 
@@ -1501,22 +1498,19 @@ const server = new McpServer(
         },
       });
 
-      // Race simulation against 25s timeout — Alpic has ~30s limit
-      const simP = Orchestrator.runSimulation(dealId).catch((err) =>
+      // Kick off simulation (fire-and-forget, 3s head start) then return FAST
+      // so the widget can immediately open the dashboard and show agents running live.
+      Orchestrator.runSimulation(dealId).catch((err) =>
         console.error(`Sim error for ${dealId}: ${err.message}`)
       );
-      const tOut = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 25000));
-      const res = await Promise.race([simP.then(() => 'done' as const), tOut]);
-      const done = res !== 'timeout';
+      await new Promise(r => setTimeout(r, 3000)); // brief head start
 
       return {
         content: [{
           type: "text" as const,
-          text: done
-            ? `Deal analysis complete for ${name} (${domain}).\nDeal ID: ${dealId}\n\nNow show the deal-dashboard widget with deal_id="${dealId}".`
-            : `Deal analysis running for ${name} (${domain}).\nDeal ID: ${dealId}\n\nShow deal-dashboard widget with deal_id="${dealId}" to track live progress.`,
+          text: `Deal analysis kicked off for ${name} (${domain}).\nDeal ID: ${dealId}`,
         }],
-        structuredContent: { deal_id: dealId, name, domain, firm_type: firm_type || 'early_vc', aum, completed: done, in_progress: !done },
+        structuredContent: { deal_id: dealId, name, domain, firm_type: firm_type || 'early_vc', aum, in_progress: true },
       };
     } catch (err: any) {
       return {
