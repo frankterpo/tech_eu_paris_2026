@@ -234,7 +234,7 @@ function RadarChart({ scores }: { scores: { label: string; value: number }[] }) 
         {scores.map((_, i) => (
           <line key={i} x1={cx} y1={cy} x2={pt(i, R).x} y2={pt(i, R).y} stroke="currentColor" strokeOpacity={0.1} strokeWidth={0.5} />
         ))}
-        <polygon points={dataPoly.map(p => `${p.x},${p.y}`).join(" ")} fill="#667eea" fillOpacity={0.18} stroke="#667eea" strokeWidth={1.5} className="radar-area" />
+        <polygon points={dataPoly.map(p => `${p.x},${p.y}`).join(" ")} fill="#2563eb" fillOpacity={0.18} stroke="#2563eb" strokeWidth={1.5} className="radar-area" />
         {scores.map((s, i) => {
           const d = dataPoly[i];
           const lbl = pt(i, R + 16);
@@ -298,7 +298,7 @@ function SwarmMap({ liveUpdates, analysts, decision, companyName, avgScore }: {
   const W = 560, H = 360;
   const toolY = 40, anY = 135, asY = 225, ptY = 305;
   const cx = [93, 280, 467];
-  const toolColor: Record<string, string> = { Specter: "#7c4dff", Cala: "#26a69a", Tavily: "#ffa726" };
+  const toolColor: Record<string, string> = { Specter: "#2563eb", Cala: "#26a69a", Tavily: "#ffa726" };
   // Order by call volume — Specter first (primary), then Cala, then Tavily
   const allTools = Object.entries(tt).sort((a, b) => b[1] - a[1]).map(([k]) => k);
   const top3 = allTools.slice(0, 3);
@@ -328,12 +328,12 @@ function SwarmMap({ liveUpdates, analysts, decision, companyName, avgScore }: {
       const calls = at[tn.label] || 0;
       if (calls > 0) edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[ai], y2: anY - 22, w: Math.min(calls * 0.6, 4), c: tn.color });
     }
-    if (anNodes[ai].factCount > 0) edges.push({ x1: cx[ai], y1: anY + 22, x2: cx[1], y2: asY - 18, w: Math.min(anNodes[ai].factCount * 0.4, 3), c: "#667eea" });
+    if (anNodes[ai].factCount > 0) edges.push({ x1: cx[ai], y1: anY + 22, x2: cx[1], y2: asY - 18, w: Math.min(anNodes[ai].factCount * 0.4, 3), c: "#2563eb" });
   }
   // assoc tools
   const ast = agentTools["associate"] || {};
   for (const tn of toolNodes) { if (ast[tn.label]) edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[1], y2: asY - 18, w: 1, c: tn.color }); }
-  edges.push({ x1: cx[1], y1: asY + 18, x2: cx[1], y2: ptY - 18, w: 2, c: "#5c6bc0" });
+  edges.push({ x1: cx[1], y1: asY + 18, x2: cx[1], y2: ptY - 18, w: 2, c: "#3b82f6" });
   // partner tools
   const ptt = agentTools["partner"] || {};
   for (const tn of toolNodes) { if (ptt[tn.label]) edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[1], y2: ptY - 18, w: 1, c: tn.color }); }
@@ -367,16 +367,16 @@ function SwarmMap({ liveUpdates, analysts, decision, companyName, avgScore }: {
         {/* Analyst nodes */}
         {anNodes.map((a, i) => (
           <g key={a.id} filter="url(#glow)">
-            <circle cx={a.x} cy={a.y} r={22} fill="#667eea" fillOpacity={0.1} stroke="#667eea" strokeWidth={1.3} />
-            <text x={a.x} y={a.y - 4} textAnchor="middle" className="sw-label" fill="#667eea">{a.specialization}</text>
+            <circle cx={a.x} cy={a.y} r={22} fill="#2563eb" fillOpacity={0.1} stroke="#2563eb" strokeWidth={1.3} />
+            <text x={a.x} y={a.y - 4} textAnchor="middle" className="sw-label" fill="#2563eb">{a.specialization}</text>
             <text x={a.x} y={a.y + 8} textAnchor="middle" className="sw-stat">{a.factCount}f · {a.unknownCount}u</text>
           </g>
         ))}
 
         {/* Associate */}
         <g filter="url(#glow)">
-          <circle cx={cx[1]} cy={asY} r={20} fill="#5c6bc0" fillOpacity={0.1} stroke="#5c6bc0" strokeWidth={1.3} />
-          <text x={cx[1]} y={asY - 2} textAnchor="middle" className="sw-label" fill="#5c6bc0">Associate</text>
+          <circle cx={cx[1]} cy={asY} r={20} fill="#3b82f6" fillOpacity={0.1} stroke="#3b82f6" strokeWidth={1.3} />
+          <text x={cx[1]} y={asY - 2} textAnchor="middle" className="sw-label" fill="#3b82f6">Associate</text>
           <text x={cx[1]} y={asY + 10} textAnchor="middle" className="sw-stat">synthesis</text>
         </g>
 
@@ -556,7 +556,7 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
   @page { margin: 1.5cm; size: A4; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, sans-serif; color: #1a1a2e; line-height: 1.5; padding: 2rem; max-width: 800px; margin: 0 auto; }
-  .cover { text-align: center; padding: 3rem 0 2rem; border-bottom: 3px solid #667eea; margin-bottom: 2rem; }
+  .cover { text-align: center; padding: 3rem 0 2rem; border-bottom: 3px solid #2563eb; margin-bottom: 2rem; }
   .cover h1 { font-size: 2rem; color: #1a1a2e; margin-bottom: 0.5rem; }
   .cover .subtitle { font-size: 1.1rem; color: #666; }
   .cover .decision-badge { display: inline-block; padding: 8px 24px; border-radius: 6px; font-weight: 700; font-size: 1.2rem; margin-top: 1rem; color: #fff; }

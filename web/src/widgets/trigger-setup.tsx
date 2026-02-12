@@ -106,7 +106,7 @@ function TriggerSetup() {
           <div className="trg-title">Monitor {data.company}</div>
           <div className="trg-subtitle">
             Track key milestones. Triggers created via{" "}
-            <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#7c5cfc" }}>
+            <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#2563eb" }}>
               Cala AI Console
             </a>{" "}
             — alerts forwarded to your email via Resend.
@@ -133,7 +133,7 @@ function TriggerSetup() {
               <span className="trg-step-num">1</span>
               <span>
                 Open{" "}
-                <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#7c5cfc", fontWeight: 600 }}>
+                <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#2563eb", fontWeight: 600 }}>
                   console.cala.ai/triggers
                 </a>
               </span>
@@ -249,7 +249,7 @@ function TriggerSetup() {
 
           <div className="trg-powered">
             Triggers via{" "}
-            <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#7c5cfc" }}>
+            <a href={CALA_CONSOLE_URL} target="_blank" rel="noopener" style={{ color: "#2563eb" }}>
               <b>Cala.ai</b>
             </a>{" "}
             · Alerts via <b>Resend</b>
