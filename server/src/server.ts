@@ -43,7 +43,7 @@ const server = new McpServer(
     },
     {
       description:
-        "STEP 1: Research a company. Use this when the user mentions any company name or domain. Returns an interactive profile card with funding, traction, and team data. CRITICAL: This is a STANDALONE step — do NOT call analyze_deal or deal-dashboard after this. The widget has its own 'Process Deal' button that the user will click when ready. Only speak if the user explicitly asks a question.",
+        "Research a company. Use this when the user mentions any company name or domain. Returns an interactive profile card with funding, traction, and team data. CRITICAL: After calling this tool, STOP. Do NOT call deal-dashboard, analyze_deal, or any other tool. Do NOT show any text — the widget speaks for itself. The user will use buttons in the widget when ready.",
       inputSchema: {
         domain: z.string().describe("Company domain (e.g. mistral.ai, stripe.com)"),
         name: z.string().optional().describe("Company name (optional)"),
@@ -76,9 +76,9 @@ const server = new McpServer(
         // Check if deal already exists
         const existingDeal = PersistenceManager.findDealByNameOrDomain(domain);
         if (existingDeal) {
-          textParts.push(`\nExisting deal found (${existingDeal.status || 'in_progress'}). The widget has a "View Dashboard" button for the user.`);
+          textParts.push(`\nSTOP HERE. Do not call any more tools. The user can see a "View Dashboard" button in the widget.`);
         } else {
-          textParts.push(`\nNo deal exists yet. The widget has a "Process Deal" button — wait for the user to click it.`);
+          textParts.push(`\nSTOP HERE. Do not call any more tools. The user can see a "Process Deal" button in the widget.`);
         }
       } else {
         textParts.push(`Company not found for domain: ${domain}`);
@@ -129,6 +129,7 @@ const server = new McpServer(
       annotations: { readOnlyHint: true },
       _meta: {
         "openai/widgetAccessible": true,
+        "openai/requiresConfirmation": true,
         "openai/toolInvocation/invoking": "Loading deal analysis...",
         "openai/toolInvocation/invoked": "Deal dashboard ready",
       },
@@ -149,19 +150,25 @@ const server = new McpServer(
 
       // ── AUTO-RESUME: On serverless, background promises die. Each dashboard
       // poll advances the stalled simulation by one wave (analysts→associate→partner).
-      // Racing against Alpic's ~30s function timeout — keep this well under 15s
-      // to leave room for cold start + response serialization.
+      // FAST PATH: skip resume if deal was just created (<10s ago) — let the first
+      // dashboard render instantly. The widget's auto-poll will advance on subsequent calls.
       let resumeResult = 'skipped';
-      try {
-        const raceResult = await Promise.race([
-          Orchestrator.resumeIfStalled(deal_id),
-          new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 8000))
-        ]);
-        resumeResult = raceResult || 'done';
-      } catch (err: any) {
-        resumeResult = `error: ${err.message?.slice(0, 100)}`;
+      const dealAge = Date.now() - (new Date((state as any).created_at || (state.deal_input as any)?.created_at || 0).getTime() || 0);
+      const isNewDeal = dealAge < 10_000 || isNaN(dealAge);
+      if (!isNewDeal) {
+        try {
+          const raceResult = await Promise.race([
+            Orchestrator.resumeIfStalled(deal_id),
+            new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 5000))
+          ]);
+          resumeResult = raceResult || 'done';
+        } catch (err: any) {
+          resumeResult = `error: ${err.message?.slice(0, 100)}`;
+        }
+      } else {
+        resumeResult = 'fast-path (new deal)';
       }
-      console.log(`[deal-dashboard] Resume result for ${deal_id}: ${resumeResult}`);
+      console.log(`[deal-dashboard] Resume result for ${deal_id}: ${resumeResult} (age=${dealAge}ms)`);
 
       // ── Build rich pipeline status from node memories ──────────────
       const analystConfigs = state.deal_input.persona_config?.analysts || [
