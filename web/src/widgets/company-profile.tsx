@@ -119,7 +119,7 @@ function CompanyProfile() {
       <div className="cp-header">
         <img
           className="cp-avatar"
-          src={p.logo_url || `https://logo.clearbit.com/${p.domain}`}
+          src={p.logo_url || `https://icons.duckduckgo.com/ip3/${p.domain}.ico`}
           alt={p.name}
           onError={(e) => {
             const el = e.currentTarget;

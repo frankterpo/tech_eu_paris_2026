@@ -35,9 +35,7 @@ const server = new McpServer(
           prefersBorder: false,
           csp: {
             resourceDomains: [
-              "https://logo.clearbit.com",
-              "https://img.logo.dev",
-              "https://cdn.brandfetch.io",
+              "https://icons.duckduckgo.com",
             ],
           },
         },
@@ -116,9 +114,7 @@ const server = new McpServer(
           prefersBorder: false,
           csp: {
             resourceDomains: [
-              "https://logo.clearbit.com",
-              "https://img.logo.dev",
-              "https://cdn.brandfetch.io",
+              "https://icons.duckduckgo.com",
             ],
           },
         },
