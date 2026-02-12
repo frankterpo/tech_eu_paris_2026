@@ -1124,7 +1124,11 @@ Return as the required JSON schema.`;
         CalaClient.search(query).then(r => {
           PersistenceManager.completeToolAction(calaActionId, { status: 'success', latencyMs: Date.now() - calaStart, resultCount: r.length });
           PersistenceManager.logQuery({ dealId, toolActionId: calaActionId, queryText: query, queryType: 'search', provider: 'cala', resultCount: r.length });
-          if (r.length > 0) this.emitLiveUpdate(dealId, 'source_found', `Cala: ${r.length} sources`);
+          if (r.length > 0) {
+            this.emitLiveUpdate(dealId, 'source_found', `Cala: ${r.length} sources`);
+            // Emit as orchestrator tool call so swarm map counts it
+            this.emitLiveUpdate(dealId, 'orchestrator_tool', `⚡ Cala Search — ${r.length} results`);
+          }
           return r;
         }).catch(err => {
           PersistenceManager.completeToolAction(calaActionId, { status: 'error', errorMsg: err.message, latencyMs: Date.now() - calaStart });
@@ -1135,7 +1139,11 @@ Return as the required JSON schema.`;
           ? SpecterClient.enrichByDomain(state.deal_input.domain).then(r => {
               if (specterActionId) PersistenceManager.completeToolAction(specterActionId, { status: 'success', latencyMs: Date.now() - specterStart, resultCount: r.evidence.length });
               if (r.profile) PersistenceManager.cacheCompanyProfile(r.profile);
-              if (r.evidence.length > 0) this.emitLiveUpdate(dealId, 'source_found', `Specter: ${r.evidence.length} data points`);
+              if (r.evidence.length > 0) {
+                this.emitLiveUpdate(dealId, 'source_found', `Specter: ${r.evidence.length} data points`);
+                // Emit as orchestrator tool call so swarm map counts it
+                this.emitLiveUpdate(dealId, 'orchestrator_tool', `⚡ Specter Enrich — ${r.evidence.length} data points`);
+              }
               if (r.profile?.funding_total_usd) {
                 this.emitLiveUpdate(dealId, 'source_found', `Funding: $${(r.profile.funding_total_usd / 1e6).toFixed(1)}M raised`);
               }
@@ -1192,6 +1200,12 @@ Return as the required JSON schema.`;
           const batchIntelStart = Date.now();
 
           const intelResults = await CalaClient.batchIntelQueries(companyNameForIntel);
+          const intelWithData = intelResults.filter(r => r.hasData);
+
+          // Emit as orchestrator tool calls for swarm map counting
+          if (intelWithData.length > 0) {
+            this.emitLiveUpdate(dealId, 'orchestrator_tool', `⚡ Cala Intel ×${intelResults.length} — ${intelWithData.length} categories with data`);
+          }
 
           // Emit per-result source updates (animated appearance in UI)
           for (const r of intelResults) {
@@ -1203,7 +1217,7 @@ Return as the required JSON schema.`;
           }
           PersistenceManager.completeToolAction(batchIntelActionId, {
             status: 'success', latencyMs: Date.now() - batchIntelStart,
-            resultCount: intelResults.filter(r => r.hasData).length,
+            resultCount: intelWithData.length,
           });
           for (const r of intelResults) {
             PersistenceManager.logQuery({
@@ -1287,9 +1301,30 @@ Return as the required JSON schema.`;
       }
 
       // ── Specter competitive intel (fires NOW, not after analysts) ──
-      const specterCompanyId = state.company_profile?.specter_id;
+      let specterCompanyId = state.company_profile?.specter_id;
+      const dealDomain = state.deal_input.domain;
       const competitiveIntelPromise = (async () => {
-        if (!specterCompanyId) return { companies: [] as any[], evidence: [] as any[] };
+        // If no specter_id, try to resolve it from the domain via enrichment
+        if (!specterCompanyId && dealDomain) {
+          try {
+            console.log(`[Orchestrator] No specter_id in state, resolving from domain: ${dealDomain}`);
+            const enrichResult = await SpecterClient.enrichByDomain(dealDomain);
+            if (enrichResult.profile?.specter_id) {
+              specterCompanyId = enrichResult.profile.specter_id;
+              console.log(`[Orchestrator] Resolved specter_id: ${specterCompanyId}`);
+              // Update state with the resolved profile if it was missing
+              if (!state.company_profile?.specter_id) {
+                this.emitEvent(dealId, 'COMPANY_PROFILE_ADDED', { profile: enrichResult.profile });
+              }
+            }
+          } catch (err: any) {
+            console.warn(`[Orchestrator] Failed to resolve specter_id from domain: ${err.message}`);
+          }
+        }
+        if (!specterCompanyId) {
+          console.warn(`[Orchestrator] No specter_id available for competitive intel — skipping`);
+          return { companies: [] as any[], evidence: [] as any[] };
+        }
         try {
           this.emitLiveUpdate(dealId, 'competitive_intel',
             `Specter: finding competitors for ${companyName}…`);
@@ -1300,6 +1335,10 @@ Return as the required JSON schema.`;
           );
           PersistenceManager.completeToolAction(simActionId, { status: 'success', latencyMs: Date.now() - simStart, resultCount: companies.length });
           PersistenceManager.logQuery({ dealId, toolActionId: simActionId, queryText: `similar companies for ${specterCompanyId}`, queryType: 'similar', provider: 'specter', resultCount: rawIds.length });
+          // Emit as tool call for swarm map counting (enrichTop enrichments + 1 similar call)
+          if (rawIds.length > 0) {
+            this.emitLiveUpdate(dealId, 'orchestrator_tool', `⚡ Specter Similar — ${rawIds.length} competitors found`);
+          }
 
           const compEvidence: any[] = [...similarEvidence];
           const enriched = companies.filter(c => c.name && !c.name.startsWith('(ID:'));

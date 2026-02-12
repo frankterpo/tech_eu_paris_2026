@@ -350,10 +350,11 @@ export class SpecterClient {
       }
 
       const raw = results[0];
+      console.log(`[Specter] Raw enrichment ID fields: id=${raw.id}, _id=${raw._id}, specter_id=${raw.specter_id}, company_id=${raw.company_id}`);
       const profile = this.normalizeProfile(raw, domain);
       const evidence = this.profileToEvidence(profile);
 
-      console.log(`[Specter] Enriched "${profile.name}" — ${evidence.length} evidence items`);
+      console.log(`[Specter] Enriched "${profile.name}" (specter_id: ${profile.specter_id}) — ${evidence.length} evidence items`);
       return { profile, evidence };
     } catch (error: any) {
       console.warn(`[Specter] Enrichment failed (${error.message}). Skipping.`);
@@ -531,7 +532,7 @@ export class SpecterClient {
 
   private static normalizeProfile(raw: any, domain: string): CompanyProfile {
     return {
-      specter_id: raw.id || raw._id || '',
+      specter_id: raw.id || raw._id || raw.specter_id || raw.company_id || '',
       name: raw.name || raw.organization_name || '',
       domain,
       description: raw.description || '',
