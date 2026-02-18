@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://lillie-nonperceptive-splendidly.ngrok-free.dev/api/tools",
-      "description": "Local development (update ngrok URL)"
+      "url": "https://dealbot-tools.teamdeel.workers.dev",
+      "description": "Cloudflare Worker — permanent, 24/7, no ngrok needed"
     }
   ],
   "paths": {
