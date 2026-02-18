@@ -40,6 +40,9 @@ const TMP_DB_DIR = '/tmp/dealbot/data';
 let DATA_DIR = CWD_DB_DIR;
 try {
   fs.mkdirSync(CWD_DB_DIR, { recursive: true });
+  const testFile = path.join(CWD_DB_DIR, '.write-test');
+  fs.writeFileSync(testFile, 'test');
+  fs.unlinkSync(testFile);
 } catch {
   DATA_DIR = TMP_DB_DIR;
   try { fs.mkdirSync(TMP_DB_DIR, { recursive: true }); } catch {}

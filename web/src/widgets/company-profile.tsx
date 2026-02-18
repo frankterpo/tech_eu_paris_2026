@@ -46,13 +46,13 @@ function CompanyProfile() {
   const p = data?.profile;
   const existingDealId = data?.existing_deal_id;
 
-  // Auto-chain: when analyze_deal returns a deal_id → immediately request dashboard
+  // Auto-chain: when analyze_deal returns a deal_id → ask ChatGPT to render dashboard
   const analyzeDealId = (analyze.data?.structuredContent as any)?.deal_id;
   useEffect(() => {
     if (analyze.isSuccess && !dashboardRequested && analyzeDealId) {
       setDashboardRequested(true);
       sendFollowUp(
-        `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
+        `Show the deal dashboard for deal_id="${analyzeDealId}".`,
       );
     }
   }, [analyze.isSuccess, analyzeDealId, dashboardRequested]);
@@ -273,13 +273,14 @@ function CompanyProfile() {
         <div className="cp-actions-row">
           <button
             className="cp-btn cp-btn-primary"
+            style={{ whiteSpace: "nowrap" }}
             onClick={() =>
               sendFollowUp(
-                `Call the deal-dashboard tool now with deal_id="${existingDealId}". Do not add any commentary.`,
+                `Show the deal dashboard for deal_id="${existingDealId}".`,
               )
             }
           >
-            View Dashboard →
+            Open Dashboard →
           </button>
           <button
             className="cp-btn cp-btn-ghost"
@@ -299,12 +300,13 @@ function CompanyProfile() {
       ) : analyze.isSuccess ? (
         <div className="cp-status cp-status-success">
           <span className="cp-check">✓</span>
-          <span>Analysis complete</span>
+          <span>Analysis running</span>
           <button
             className="cp-btn cp-btn-primary cp-btn-sm"
+            style={{ whiteSpace: "nowrap" }}
             onClick={() =>
               sendFollowUp(
-                `Call the deal-dashboard tool now with deal_id="${analyzeDealId}". Do not add any commentary.`,
+                `Show the deal dashboard for deal_id="${analyzeDealId}".`,
               )
             }
           >

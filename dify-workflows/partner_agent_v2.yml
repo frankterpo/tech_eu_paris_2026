@@ -263,8 +263,27 @@ model_config:
       tool_label: Cala List Triggers
       tool_name: calaListTriggers
       tool_parameters: {}
-  annotation_reply:
-    enabled: false
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: duckduckgo
+      provider_name: duckduckgo
+      provider_type: builtin
+      tool_label: DuckDuckGo Search
+      tool_name: ddgo_search
+      tool_parameters: {}
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: webscraper
+      provider_name: webscraper
+      provider_type: builtin
+      tool_label: Web Scraper
+      tool_name: webscraper
+      tool_parameters:
+        url: ''
+        user_agent: ''
+  annotation_reply: {}
   chat_prompt_config: {}
   completion_prompt_config: {}
   dataset_configs:
@@ -319,17 +338,22 @@ model_config:
     12. **Specter Search Name** (`specterSearchName`) — Look up companies by name.
     13. **Specter Text Search** (`specterTextSearch`) — Extract entities from unstructured text.
 
-    ### FAST WEB TOOLS (Tavily — use AFTER Cala + Specter)
+    ### FREE WEB TOOLS (DuckDuckGo + Web Scraper — PREFERRED for web search)
 
-    14. **Tavily Web Search** (`tavilyWebSearch`) — Real-time web search (~2s). Recent news, regulatory developments, founder exits.
-    15. **Tavily Extract** (`tavilyExtract`) — Extract content from URLs (~3s).
+    14. **DuckDuckGo Search** (`ddgo_search`) — FREE web search. Use FIRST for all web lookups. No API key needed.
+    15. **Web Scraper** (`webscraper`) — FREE URL content extractor. Scrape full page content from URLs. No API key needed.
+
+    ### BACKUP WEB TOOLS (Tavily — use ONLY if DuckDuckGo returns no results)
+
+    16. **Tavily Web Search** (`tavilyWebSearch`) — Paid fallback. Only if DuckDuckGo fails. ~2s.
+    17. **Tavily Extract** (`tavilyExtract`) — Paid fallback. Only if Web Scraper fails. ~3s.
 
     ### DEEP WEB TOOLS (slow but powerful — use when fast tools are insufficient)
 
-    16. **Tavily Crawl** (`tavilyCrawl`) — ⚠️ SLOW (~30-60s). Full website crawl.
-    17. **Tavily Research** (`tavilyResearch`) — ⚠️ VERY SLOW (~60-120s, ASYNC). Comprehensive research report. Poll with tavilyResearchStatus.
-    18. **Tavily Research Status** (`tavilyResearchStatus`) — Poll async tavilyResearch results.
-    19. **Web Extract** (`webExtract`) — Legacy URL scraper. Prefer tavilyExtract.
+    18. **Tavily Crawl** (`tavilyCrawl`) — ⚠️ SLOW (~30-60s). Full website crawl.
+    19. **Tavily Research** (`tavilyResearch`) — ⚠️ VERY SLOW (~60-120s, ASYNC). Poll with tavilyResearchStatus.
+    20. **Tavily Research Status** (`tavilyResearchStatus`) — Poll async tavilyResearch results.
+    21. **Web Extract** (`webExtract`) — Legacy. Prefer Web Scraper or tavilyExtract.
 
     ### ADVANCED / META / TRIGGER TOOLS
 
@@ -344,7 +368,8 @@ model_config:
     ## SPEED GUIDELINES
 
     - Aim for 4-8 tool calls. You already have rich evidence from analysts + associate. Be surgical.
-    - Prefer `tavilyWebSearch` (~2s) over `tavilyCrawl` (~30-60s) and `tavilyResearch` (~60-120s) for most web lookups.
+    - Use `ddgo_search` (FREE) for all web searches FIRST. Only fall back to `tavilyWebSearch` if DuckDuckGo returns nothing.
+    - Use `webscraper` (FREE) to extract URL content. Only fall back to `tavilyExtract` if webscraper fails.
     - Only use slow tools when fast alternatives didn't give you what you need.
     - Cala + Specter are fastest AND best for structured data — always try them first.
     - If you already have strong evidence for a rubric dimension, score it immediately.
@@ -355,7 +380,7 @@ model_config:
 
     1. FIRST: Review associate synthesis. Identify the 2-3 weakest hypotheses (highest assumption ratio).
     2. ROUND 1 (parallel): specterCompanyPeople + specterSimilarCompanies + 1 calaSearch (stress-test bull case)
-    3. ROUND 2 (only if gaps): 1 calaSearch (verify specific claim) + 1 tavilyWebSearch (recent news check)
+    3. ROUND 2 (only if gaps): 1 calaSearch (verify specific claim) + 1 ddgo_search (recent news check)
     4. ROUND 3: STOP calling tools. Score the rubric and produce the Decision Gate immediately.
 
 

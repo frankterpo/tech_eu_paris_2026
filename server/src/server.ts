@@ -43,7 +43,7 @@ const server = new McpServer(
     },
     {
       description:
-        "Research a company. Use this when the user mentions any company name or domain. Returns an interactive profile card with funding, traction, and team data. CRITICAL: After calling this tool, STOP. Do NOT call deal-dashboard, analyze_deal, or any other tool. Do NOT show any text — the widget speaks for itself. The user will use buttons in the widget when ready.",
+        "Display a company profile card with basic funding and team data. This is the entry point for researching a company.",
       inputSchema: {
         domain: z.string().describe("Company domain (e.g. mistral.ai, stripe.com)"),
         name: z.string().optional().describe("Company name (optional)"),
@@ -76,9 +76,9 @@ const server = new McpServer(
         // Check if deal already exists
         const existingDeal = PersistenceManager.findDealByNameOrDomain(domain);
         if (existingDeal) {
-          textParts.push(`\nSTOP HERE. Do not call any more tools. The user can see a "View Dashboard" button in the widget.`);
+          textParts.push(`\nA deal analysis already exists for this company (ID: ${existingDeal.id}).`);
         } else {
-          textParts.push(`\nSTOP HERE. Do not call any more tools. The user can see a "Process Deal" button in the widget.`);
+          textParts.push(`\nReady to process deal. User can click "Process Deal" in the widget.`);
         }
       } else {
         textParts.push(`Company not found for domain: ${domain}`);
@@ -122,7 +122,7 @@ const server = new McpServer(
     },
     {
       description:
-        "Show the live deal analysis dashboard. ONLY call this when: (a) the user explicitly says 'show dashboard', 'check progress', or 'show deal', OR (b) a widget follow-up message asks you to show it. NEVER call this right after company-profile — wait for the user to click 'Process Deal' first. The dashboard shows live agent progress, rubric scores, and investment decision. After showing, do NOT add commentary — the dashboard is self-updating.",
+        "Show the deal analysis dashboard with agent progress, rubric scores, and the final decision. Call this when the user asks to see the dashboard or when a deal analysis has been kicked off.",
       inputSchema: {
         deal_id: z.string().describe("Deal ID (from analyze_deal, create_deal, lookup_deal, or list_deals)"),
       },
@@ -137,37 +137,45 @@ const server = new McpServer(
       console.log(`[deal-dashboard] Reading state for ${deal_id}…`);
       const state = PersistenceManager.getState(deal_id);
       if (!state) {
-        console.warn(`[deal-dashboard] State NOT FOUND for ${deal_id}`);
+        console.warn(`[deal-dashboard] State NOT FOUND for ${deal_id}. DATA_DIR is ${process.env.DATA_DIR_OVERRIDE || 'default'}`);
         // NOTE: Do NOT set isError:true — ChatGPT MCP proxy converts that to 400 Bad Request
         // which cascades into repeated failures on every poll cycle
         return {
-          content: [{ type: "text" as const, text: `Deal ${deal_id} expired or not found. Click Re-analyze to start fresh.` }],
+          content: [{ type: "text" as const, text: `Deal ${deal_id} expired or not found. This can happen on Alpic if the server restarts. Click Re-analyze to start fresh.` }],
           structuredContent: { error: "not_found" as const, deal_id },
         };
       }
       console.log(`[deal-dashboard] State found for ${deal_id}: evidence=${state.evidence?.length}, company=${state.deal_input?.name}`);
 
       // ── AUTO-RESUME: On serverless, background promises die. Each dashboard
-      // poll advances the stalled simulation by one wave (analysts→associate→partner).
-      // FAST PATH: skip resume if deal was just created (<10s ago) — let the first
-      // dashboard render instantly. The widget's auto-poll will advance on subsequent calls.
+      // call advances the stalled simulation by one or more waves (analysts→associate→partner).
+      // ALWAYS run the resume chain — even for brand-new deals — so the first render
+      // already shows rich analyst activity, evidence gathering, and tool invocations.
       let resumeResult = 'skipped';
-      const dealAge = Date.now() - (new Date((state as any).created_at || (state.deal_input as any)?.created_at || 0).getTime() || 0);
-      const isNewDeal = dealAge < 10_000 || isNaN(dealAge);
-      if (!isNewDeal) {
-        try {
+      try {
+        const startTime = Date.now();
+        const BUDGET_MS = 12000; // 12s budget for chaining (generous for first render)
+        let wave = 0;
+        while (Date.now() - startTime < BUDGET_MS) {
           const raceResult = await Promise.race([
             Orchestrator.resumeIfStalled(deal_id),
-            new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 5000))
+            new Promise<'timeout'>(r => setTimeout(() => r('timeout'), Math.max(1000, BUDGET_MS - (Date.now() - startTime))))
           ]);
+          wave++;
           resumeResult = raceResult || 'done';
-        } catch (err: any) {
-          resumeResult = `error: ${err.message?.slice(0, 100)}`;
+          if (raceResult !== 'advanced') break;
+          console.log(`[deal-dashboard] Wave ${wave} advanced for ${deal_id}, chaining next…`);
         }
-      } else {
-        resumeResult = 'fast-path (new deal)';
+      } catch (err: any) {
+        resumeResult = `error: ${err.message?.slice(0, 100)}`;
       }
-      console.log(`[deal-dashboard] Resume result for ${deal_id}: ${resumeResult} (age=${dealAge}ms)`);
+      console.log(`[deal-dashboard] Resume result for ${deal_id}: ${resumeResult}`);
+
+      // ── Re-read state after resume chain (resume writes to disk) ──
+      const freshState = PersistenceManager.getState(deal_id);
+      if (freshState) {
+        Object.assign(state, freshState);
+      }
 
       // ── Build rich pipeline status from node memories ──────────────
       const analystConfigs = state.deal_input.persona_config?.analysts || [
@@ -249,6 +257,7 @@ const server = new McpServer(
         content: [{ type: "text" as const, text: textParts.join("\n") }],
         structuredContent: {
           deal_id,
+          created_at: (state as any).created_at || (state.deal_input as any)?.created_at,
           deal_input: state.deal_input,
           evidence: slimEvidence,
           hypotheses: state.hypotheses || [],
@@ -311,7 +320,7 @@ const server = new McpServer(
     } catch (err: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
-        isError: true,
+        structuredContent: { error: err.message },
       };
     }
   })
@@ -342,7 +351,7 @@ const server = new McpServer(
     } catch (err: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
-        isError: true,
+        structuredContent: { error: err.message },
       };
     }
   })
@@ -368,7 +377,7 @@ const server = new McpServer(
     } catch (err: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
-        isError: true,
+        structuredContent: { error: err.message },
       };
     }
   })
@@ -418,7 +427,6 @@ const server = new McpServer(
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
         structuredContent: { evidence: [], entities: [], query, error: err.message },
-        isError: true,
       };
     }
   })
@@ -441,7 +449,7 @@ const server = new McpServer(
       );
       return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -462,7 +470,7 @@ const server = new McpServer(
       const text = `**${p.name}** (${p.domain})\nStage: ${p.growth_stage} | HQ: ${p.hq_city}, ${p.hq_country}\nFunding: $${p.funding_total_usd ? (p.funding_total_usd / 1e6).toFixed(1) + 'M' : 'N/A'} | Employees: ${p.employee_count || '?'}\nLogo: ${p.logo_url || 'N/A'}`;
       return { content: [{ type: "text" as const, text }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -479,7 +487,7 @@ const server = new McpServer(
       const identifier: { linkedin_url?: string; linkedin_id?: string } = {};
       if (linkedin_url) identifier.linkedin_url = linkedin_url;
       else if (linkedin_id) identifier.linkedin_id = linkedin_id;
-      else return { content: [{ type: "text" as const, text: "Provide linkedin_url or linkedin_id." }], isError: true };
+      else return { content: [{ type: "text" as const, text: "Provide linkedin_url or linkedin_id." }], };
 
       const result = await SpecterClient.enrichPerson(identifier);
       if (!result.person) {
@@ -489,7 +497,7 @@ const server = new McpServer(
       const text = `**${p.full_name}** — ${p.title}\n${p.tagline || ''}\nLocation: ${p.location || '?'} | Exp: ${p.years_of_experience || '?'} yrs | Ed: ${p.education_level || '?'}\nSkills: ${p.skills?.slice(0, 8).join(', ') || '?'}\nPhoto: ${p.profile_picture_url || 'N/A'}`;
       return { content: [{ type: "text" as const, text }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -510,7 +518,7 @@ const server = new McpServer(
       const text = `**${p.full_name}** — ${p.title}\n${p.about?.slice(0, 200) || ''}\nPhoto: ${p.profile_picture_url || 'N/A'}`;
       return { content: [{ type: "text" as const, text }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -530,7 +538,7 @@ const server = new McpServer(
       }
       return { content: [{ type: "text" as const, text: `Email: ${result.email}` }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -553,7 +561,7 @@ const server = new McpServer(
       }
       return { content: [{ type: "text" as const, text: lines.join("\n") || "No results." }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -572,7 +580,7 @@ const server = new McpServer(
       }
       return { content: [{ type: "text" as const, text: JSON.stringify(result.entity, null, 2).slice(0, 1000) }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -593,7 +601,7 @@ const server = new McpServer(
       const lines = result.entities.map((e, i) => `${i + 1}. **${e.name}** (${e.entity_type}) — ID: ${e.id}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -631,7 +639,7 @@ const server = new McpServer(
       if (result.answer) lines.unshift(`**Answer:** ${result.answer}\n`);
       return { content: [{ type: "text" as const, text: lines.join("\n\n") }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -656,7 +664,7 @@ const server = new McpServer(
       if (result.failedUrls.length) lines.push(`\n**Failed:** ${result.failedUrls.join(', ')}`);
       return { content: [{ type: "text" as const, text: lines.join("\n\n---\n\n") }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -683,7 +691,7 @@ const server = new McpServer(
       );
       return { content: [{ type: "text" as const, text: `Crawled ${result.results.length} pages from ${url}\n\n${lines.join("\n\n---\n\n")}` }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -703,7 +711,7 @@ const server = new McpServer(
       }
       return { content: [{ type: "text" as const, text: `Research task queued.\n**Request ID:** ${result.requestId}\n**Status:** ${result.status}\n\nPoll with \`tavily_research_status\` using this ID.` }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -722,7 +730,7 @@ const server = new McpServer(
       if (result.sources?.length) lines.push(`\n**Sources:** ${result.sources.length} referenced`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: result };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -748,7 +756,7 @@ const server = new McpServer(
       const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
       return { content: [{ type: "text" as const, text: text || "Could not extract content." }] };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error extracting ${url}: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error extracting ${url}: ${err.message}` }], };
     }
   })
 
@@ -764,7 +772,7 @@ const server = new McpServer(
   }, async ({ query, instruction, context, max_iterations }) => {
     const apiKey = process.env.DIFY_FC_AGENT_KEY;
     if (!apiKey) {
-      return { content: [{ type: "text" as const, text: "DIFY_FC_AGENT_KEY not configured. Create a Dify Agent app with FunctionCalling strategy." }], isError: true };
+      return { content: [{ type: "text" as const, text: "DIFY_FC_AGENT_KEY not configured. Create a Dify Agent app with FunctionCalling strategy." }], };
     }
     try {
       const result = await DifyClient.runCustomAgent(apiKey, {
@@ -777,7 +785,7 @@ const server = new McpServer(
       const lines = [`**Strategy:** FunctionCalling`, `**Tool Calls:** ${result.toolCalls}`, '', result.answer];
       return { content: [{ type: "text" as const, text: lines.join('\n') }], structuredContent: { answer: result.answer, parsed: result.parsed, toolCalls: result.toolCalls, strategy: 'function_calling' } };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `FC Agent error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `FC Agent error: ${err.message}` }], };
     }
   })
 
@@ -793,7 +801,7 @@ const server = new McpServer(
   }, async ({ query, instruction, context, max_iterations }) => {
     const apiKey = process.env.DIFY_REACT_AGENT_KEY;
     if (!apiKey) {
-      return { content: [{ type: "text" as const, text: "DIFY_REACT_AGENT_KEY not configured. Create a Dify Agent app with ReAct strategy." }], isError: true };
+      return { content: [{ type: "text" as const, text: "DIFY_REACT_AGENT_KEY not configured. Create a Dify Agent app with ReAct strategy." }], };
     }
     try {
       const result = await DifyClient.runCustomAgent(apiKey, {
@@ -806,7 +814,7 @@ const server = new McpServer(
       const lines = [`**Strategy:** ReAct`, `**Tool Calls:** ${result.toolCalls}`, '', result.answer];
       return { content: [{ type: "text" as const, text: lines.join('\n') }], structuredContent: { answer: result.answer, parsed: result.parsed, toolCalls: result.toolCalls, strategy: 'react' } };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `ReAct Agent error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `ReAct Agent error: ${err.message}` }], };
     }
   })
 
@@ -875,7 +883,6 @@ const server = new McpServer(
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
         structuredContent: { error: err.message },
-        isError: true,
       };
     }
   })
@@ -965,7 +972,7 @@ const server = new McpServer(
         structuredContent: { trigger, webhookUrl, calaConsoleUrl: 'https://console.cala.ai/triggers' },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error creating trigger: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error creating trigger: ${err.message}` }], };
     }
   })
 
@@ -1088,7 +1095,7 @@ const server = new McpServer(
   }, async ({ trigger_id }) => {
     const trigger = PersistenceManager.getTrigger(trigger_id);
     if (!trigger) {
-      return { content: [{ type: "text" as const, text: `Trigger ${trigger_id} not found.` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Trigger ${trigger_id} not found.` }], };
     }
     if (trigger.cala_id) await CalaClient.deleteTrigger(trigger.cala_id).catch(() => {});
     PersistenceManager.deleteTrigger(trigger_id);
@@ -1171,7 +1178,7 @@ const server = new McpServer(
         structuredContent: { sent: true, recipient: recipientEmail, trigger_name, query },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error forwarding trigger: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error forwarding trigger: ${err.message}` }], };
     }
   })
 
@@ -1252,7 +1259,7 @@ const server = new McpServer(
         },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -1412,7 +1419,7 @@ const server = new McpServer(
         },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -1432,7 +1439,7 @@ const server = new McpServer(
     try {
       const { LightpandaClient } = await import('./integrations/lightpanda/client.js');
       if (!LightpandaClient.isAvailable()) {
-        return { content: [{ type: "text" as const, text: "Lightpanda not configured (LIGHTPANDA_TOKEN missing). Use tavily_extract instead." }], isError: true };
+        return { content: [{ type: "text" as const, text: "Lightpanda not configured (LIGHTPANDA_TOKEN missing). Use tavily_extract instead." }], };
       }
       const result = await LightpandaClient.scrapeUrl(url, { waitSelector: wait_selector });
       if (!result.content) {
@@ -1443,7 +1450,7 @@ const server = new McpServer(
         structuredContent: { ...result, source: 'lightpanda' },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -1453,7 +1460,7 @@ const server = new McpServer(
 
   .registerTool("analyze_deal", {
     description:
-      "Run full deal analysis with 3 AI analysts, associate synthesis, and partner decision. Use this ONLY when a widget follow-up message triggers it (from the 'Process Deal' button). Returns a deal_id. The widget will automatically open the deal-dashboard — do NOT call deal-dashboard yourself after this.",
+      "Kick off a full deal analysis. This tool returns a deal_id. The user will then want to see the dashboard to track the analysts' progress.",
     inputSchema: {
       name: z.string().describe("Company name"),
       domain: z.string().describe("Company domain (e.g. mistral.ai)"),
@@ -1509,14 +1516,14 @@ const server = new McpServer(
       return {
         content: [{
           type: "text" as const,
-          text: `Deal analysis kicked off for ${name} (${domain}).\nDeal ID: ${dealId}`,
+          text: `Deal analysis started for ${name} (${domain}). Deal ID: ${dealId}. The user's widget will auto-open the dashboard.`,
         }],
         structuredContent: { deal_id: dealId, name, domain, firm_type: firm_type || 'early_vc', aum, in_progress: true },
       };
     } catch (err: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
-        isError: true,
+        structuredContent: { error: err.message },
       };
     }
   })
@@ -1553,7 +1560,7 @@ const server = new McpServer(
         structuredContent: { deals },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -1589,7 +1596,7 @@ const server = new McpServer(
         structuredContent: { found: true, deal_id: deal.id, ...deal, evidenceCount, decision },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], };
     }
   })
 
@@ -1616,7 +1623,7 @@ const server = new McpServer(
         structuredContent: { available: true, triggers },
       };
     } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error listing triggers: ${err.message}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Error listing triggers: ${err.message}` }], };
     }
   })
 

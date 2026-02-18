@@ -79,12 +79,13 @@ Then deploy on [app.alpic.ai](https://app.alpic.ai) (login → connect GitHub �
 | **Cala Trigger Webhook Relay** | Permanent Cloudflare Worker (`dealbot-cala-webhook.teamdeel.workers.dev`) receives Cala trigger-fired webhooks and forwards alerts via Resend email. Zero maintenance, free forever. |
 | **Manual Trigger Flow** | Users create triggers on [console.cala.ai/triggers](https://console.cala.ai/triggers) using queries from analyst research. Webhook relay handles the notification pipeline. |
 | **Resend Email Integration** | Styled HTML trigger alerts delivered to user-specified email addresses via Resend API. |
-| **Cursor Dark Theme** | company-profile and deal-dashboard widgets rethemed to Cursor.com color palette. |
+| **Cursor Light Theme** | company-profile and deal-dashboard widgets rethemed to Cursor.com light color palette. |
 | **Investor Lens in Widget** | AUM + Firm Type selectors integrated directly into the company-profile card — no extra prompts. |
-| **Side-Panel Deal History** | Slide-open panel in deal-dashboard shows past + ongoing deal runs with quick navigation. |
-| **Agent Thinking UX** | Analyst dropdowns show live thinking/milestone updates during processing. |
-| **Next Steps Prompts** | Post-assessment recommendations: founder outreach mapping + Cala trigger setup. |
-| **Evidence Panel** | Inline evidence viewer with source citations, replaces old modal. |
+| **Side-Panel Deal History** | Slide-open panel in deal-dashboard shows past + ongoing deal runs with rich metadata. |
+| **Agent Research Map** | Horizontal research pipeline showing data flow from Analysts -> Associate -> Partner. |
+| **Robust Downloads** | Markdown and PDF export with clipboard fallback for ChatGPT's sandboxed environment. |
+| **Natural Lookup Flow** | Quick company summaries trigger naturally when domains are mentioned in chat. |
+| **Manual Trigger Flow** | Guided setup for Cala AI triggers with webhook-based email notifications via Resend. |
 | **Auto-Resume Pipeline** | Serverless-safe: if Alpic times out, dashboard poll advances the simulation. No data loss. |
 | **Graceful Dify Fallback** | 401/403 from Dify → automatic stub responses. Pipeline always completes. |
 | **Double-Execution Guard** | `activeDeals` set prevents concurrent run/resume conflicts. |

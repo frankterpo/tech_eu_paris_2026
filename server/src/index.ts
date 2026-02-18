@@ -72,6 +72,33 @@ app.get("/dsl", (_req: Request, res: Response) => {
 // ── REST API routes (Dify compatibility) ─────────────────────────────
 app.use("/api/tools", toolRouter);
 
+app.get("/", (_req: Request, res: Response) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Deal Bot MCP Server</title>
+        <style>
+          body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f9fafb; color: #111827; }
+          .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 400px; text-align: center; }
+          h1 { margin-top: 0; font-size: 1.5rem; }
+          p { color: #4b5563; line-height: 1.5; }
+          .url { background: #f3f4f6; padding: 0.5rem; border-radius: 6px; font-family: monospace; font-size: 0.875rem; word-break: break-all; margin: 1rem 0; display: block; }
+          .btn { display: inline-block; background: #2563eb; color: white; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 1rem; }
+          .btn:hover { background: #1d4ed8; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>🕵️ Deal Bot MCP</h1>
+          <p>This is an MCP server. Use the following URL in ChatGPT Settings -> Developer Mode:</p>
+          <code class="url">\${_req.protocol}://${_req.get("host")}/mcp</code>
+          <a href="/try" class="btn">Open Playground</a>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
 app.post("/api/deals", async (req: Request, res: Response) => {
   try {
     // Accept both shapes:

@@ -19,9 +19,11 @@ interface AnalystNode {
   topUnknowns: (AnalystUnknown | string)[];
 }
 interface HypothesisSummary { text: string; risks: string[] }
-interface LiveUpdate { phase: string; text: string; ts: string }
+interface LiveUpdate { phase: string; text: string; ts: string; toolInput?: string; toolOutput?: string }
 interface RubricDim { score: number; reasons: string[] }
 interface DashboardData {
+  deal_id?: string;
+  created_at?: string;
   deal_input: any;
   evidence: any[];
   hypotheses: any[];
@@ -38,7 +40,6 @@ interface DashboardData {
   isComplete: boolean;
   avgScore: number;
   error?: string;
-  deal_id?: string;
 }
 interface MemoSlide {
   type: string;
@@ -73,8 +74,6 @@ function SubTaskFeed({
   const tools = feed.filter(u => u.phase === `${phasePrefix}_tool`);
   const thinks = feed.filter(u => u.phase === `${phasePrefix}_think`);
   const doneItem = feed.find(u => u.phase === `${phasePrefix}_done`);
-  // Catch-all: items that don't match query/tool/think/done (e.g. competitive intel results)
-  // Deduplicate by text to prevent duplicate rendering of competitive intel etc.
   const knownPhases = new Set([`${phasePrefix}_query`, `${phasePrefix}_tool`, `${phasePrefix}_think`, `${phasePrefix}_done`]);
   const extrasRaw = feed.filter(u => !knownPhases.has(u.phase));
   const seenTexts = new Set<string>();
@@ -84,7 +83,6 @@ function SubTaskFeed({
     return true;
   });
 
-  // Count ACTUAL tool calls — parse "⚡ Cala ×3, Specter ×2" → 5 calls, not 1 event
   let actualCalls = 0;
   for (const t of tools) {
     const multiples = t.text.match(/×(\d+)/g);
@@ -95,43 +93,28 @@ function SubTaskFeed({
     }
   }
 
-  // Compute per-query status: advance by actual calls, cap at last query
   const getQueryStatus = (idx: number) => {
     if (isDone) return "done";
     if (!isRunning) return "pending";
     if (queries.length === 0) return "pending";
-    // Cap so the last query stays "active" until _done event arrives
     const activeIdx = Math.min(actualCalls, queries.length - 1);
     if (idx < activeIdx) return "done";
     if (idx === activeIdx) return "active";
     return "pending";
   };
 
-  // Interleave tools + thinks by timestamp for activity stream
   const activity = [...tools, ...thinks].sort((a, b) => a.ts.localeCompare(b.ts));
 
   return (
     <div className="subtask-feed">
-      {/* Progress bar */}
-      {isRunning && queries.length > 0 && (
-        <div className="st-progress">
-          <div
-            className="st-progress-bar"
-            style={{ width: `${Math.min((actualCalls / Math.max(queries.length, 1)) * 100, 95)}%` }}
-          />
-          <span className="st-progress-label">
-            {actualCalls} tool{actualCalls !== 1 ? "s" : ""} called
-          </span>
-        </div>
-      )}
-
-      {/* Sub-task checklist */}
+      {/* checklist */}
       {queries.length > 0 && (
         <div className="st-list">
           {queries.map((q, i) => {
             const status = getQueryStatus(i);
+            const isLatestActive = status === "active" && i === Math.min(actualCalls, queries.length - 1);
             return (
-              <div key={i} className={`st-item st-${status}`}>
+              <div key={i} className={`st-item st-${status}${isLatestActive ? " st-latest" : ""}`}>
                 <span className="st-icon">
                   {status === "done" ? "✓" : status === "active" ? "⟳" : "○"}
                 </span>
@@ -143,7 +126,7 @@ function SubTaskFeed({
         </div>
       )}
 
-      {/* Extra items (competitive intel, misc) */}
+      {/* Extra items */}
       {extras.length > 0 && (
         <div className="st-list">
           {extras.map((u, i) => (
@@ -155,56 +138,44 @@ function SubTaskFeed({
         </div>
       )}
 
-      {/* Live activity stream (collapsible) */}
-      {activity.length > 0 && (() => {
-        // Build tool-type breakdown: "4 Cala · 3 Specter · 2 Web Search"
-        const toolCounts: Record<string, number> = {};
-        for (const u of tools) {
-          const parts = u.text.replace(/^⚡\s*/, "").split("·");
-          for (const part of parts) {
-            const m = part.trim().match(/^(.+?)(?:\s*[×x:])/);
-            const label = m ? m[1].trim() : part.trim().split(":")[0].trim();
-            if (label) toolCounts[label] = (toolCounts[label] || 0) + 1;
-          }
-        }
-        const thinkCount = thinks.length;
-        const breakdown = Object.entries(toolCounts)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 4)
-          .map(([k, v]) => `${v} ${k}`)
-          .join(" · ");
-        const summary = breakdown
-          ? `${breakdown}${thinkCount > 0 ? ` · ${thinkCount} thought${thinkCount > 1 ? "s" : ""}` : ""}`
-          : `${activity.length} action${activity.length !== 1 ? "s" : ""}`;
-        return (
-        <details className="st-activity-details" open={isRunning && activity.length <= 4}>
-          <summary className="st-activity-toggle">
-            <span>{summary}</span>
-            {isRunning && <span className="st-dots" />}
-          </summary>
-          <div className="st-activity">
-            {activity.map((u, i) => {
-              const isLast = i === activity.length - 1 && isRunning;
-              const itemCls = u.phase.endsWith("_tool") ? "feed-tool" : "feed-think";
-              return (
-                <div key={i} className={`feed-item ${itemCls}${isLast ? " feed-active" : ""}`}>
-                  {u.text}
+      {/* Live activity stream — Cursor Style */}
+      {activity.length > 0 && (
+        <div className="st-activity">
+          {activity.slice(-4).map((u, i) => {
+            const isLast = i === Math.min(activity.length, 4) - 1 && isRunning;
+            const isTool = u.phase.endsWith("_tool");
+            return (
+              <div key={i} className="st-activity-block">
+                <div className={`st-activity-line ${isTool ? "st-act-tool" : "st-act-think"}`}>
+                  <span className="st-act-verb">{isTool ? "Invoked" : "Thinking"}</span>
+                  <span className="st-act-text">{u.text.replace(/^⚡\s*/, "")}</span>
+                  {isLast && <span className="st-dots" />}
                 </div>
-              );
-            })}
-          </div>
-        </details>
-        );
-      })()}
-
-      {/* Placeholder when running but no feed yet */}
-      {isRunning && queries.length === 0 && activity.length === 0 && (
-        <div className="feed-item feed-live">
-          <span className="st-dots" /> Deploying queries…
+                {isTool && (u.toolInput || u.toolOutput) && (
+                  <div className="st-tool-io">
+                    {u.toolInput && <div className="st-tool-input">{trunc(u.toolInput, 150)}</div>}
+                    {u.toolOutput && <div className="st-tool-output">{trunc(u.toolOutput, 300)}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Done summary */}
+      {isRunning && queries.length === 0 && activity.length === 0 && (
+        <div className="feed-item feed-live">
+          <span className="st-dots" /> {
+            phasePrefix === 'analyst_1' ? "Initializing market analyst…" :
+            phasePrefix === 'analyst_2' ? "Initializing competition analyst…" :
+            phasePrefix === 'analyst_3' ? "Initializing traction analyst…" :
+            phasePrefix === 'associate' ? "Synthesizing analyst findings…" :
+            phasePrefix === 'partner' ? "Preparing investment decision…" :
+            "Deploying queries…"
+          }
+        </div>
+      )}
+
       {doneItem && (
         <div className="feed-item feed-done">{doneItem.text}</div>
       )}
@@ -251,150 +222,111 @@ function RadarChart({ scores }: { scores: { label: string; value: number }[] }) 
   );
 }
 
-/* ── Swarm Mind Map (post-deal agent network) ──────────────────────── */
-function SwarmMap({ liveUpdates, analysts, decision, companyName, avgScore }: {
+/* ── Research Timeline (analysts → associate → partner) ──────────────── */
+function ResearchTimeline({ liveUpdates, analysts, associate, partner, rubric, decision, evidence }: {
   liveUpdates: LiveUpdate[];
   analysts: AnalystNode[];
+  associate: { status: string; hypothesisCount: number };
+  partner: { status: string };
+  rubric?: DashboardData["rubric"];
   decision: string;
-  companyName: string;
-  avgScore: number;
+  evidence: any[];
 }) {
-  // Parse tool calls per agent (including orchestrator-level calls)
-  const agentTools: Record<string, Record<string, number>> = {};
+  // Build timeline entries from live updates
+  type TEntry = { ts: string; agent: string; action: string; detail: string; type: "research" | "evidence" | "analysis" | "decision" | "tool" | "score"; score?: number };
+  const entries: TEntry[] = [];
+
+  // Sources from evidence
+  const sourceMap: Record<string, number> = {};
+  for (const e of evidence) {
+    const src = e.source || "unknown";
+    sourceMap[src] = (sourceMap[src] || 0) + 1;
+  }
+
   for (const u of liveUpdates) {
-    if (!u.phase.endsWith("_tool")) continue;
-    const agent = u.phase.replace("_tool", "");
-    if (!agentTools[agent]) agentTools[agent] = {};
+    const agentLabel = u.phase.startsWith("analyst_1") ? "Market Analyst" :
+      u.phase.startsWith("analyst_2") ? "Competition Analyst" :
+      u.phase.startsWith("analyst_3") ? "Traction Analyst" :
+      u.phase.startsWith("associate") ? "Associate" :
+      u.phase.startsWith("partner") ? "Partner" :
+      u.phase.startsWith("init") ? "Orchestrator" :
+      u.phase.startsWith("complete") ? "System" : u.phase;
 
-    // Remove leading ⚡ and split by comma for multi-tool events
-    const cleaned = u.text.replace(/^⚡\s*/, "");
-    // Handle two formats:
-    //   Agent format: "Cala ×3, Specter ×2" (× count)
-    //   Orchestrator format: "Cala Search — 5 results" or "Cala Intel ×6 — 4 with data"
-    for (const part of cleaned.split(",")) {
-      const stripped = part.split("—")[0].trim(); // drop "— N results" suffix
-      const m = stripped.match(/^(.+?)(?:\s*×(\d+))?$/);
-      if (m) {
-        const raw = m[1].trim().toLowerCase();
-        const cnt = parseInt(m[2] || "1", 10);
-        const key = raw.includes("cala") ? "Cala" : raw.includes("specter") ? "Specter" : raw.includes("tavily") ? "Tavily" : m[1].trim();
-        agentTools[agent][key] = (agentTools[agent][key] || 0) + cnt;
+    const isTool = u.phase.endsWith("_tool");
+    const isThink = u.phase.endsWith("_think");
+    const cleaned = u.text.replace(/^[⚡✓●]\s*/, "");
+
+    if (isTool) {
+      entries.push({ ts: u.ts, agent: agentLabel, action: cleaned, detail: u.toolOutput ? trunc(u.toolOutput, 120) : "", type: "tool" });
+    } else if (u.phase === "complete") {
+      entries.push({ ts: u.ts, agent: "Decision", action: cleaned, detail: "", type: "decision" });
+    } else if (u.phase.startsWith("init")) {
+      entries.push({ ts: u.ts, agent: "Orchestrator", action: cleaned, detail: "", type: "research" });
+    } else {
+      entries.push({ ts: u.ts, agent: agentLabel, action: cleaned, detail: "", type: isThink ? "analysis" : "research" });
+    }
+  }
+
+  // Add score events from rubric
+  if (rubric) {
+    const dims = [
+      { key: "market", label: "Market" },
+      { key: "moat", label: "Moat" },
+      { key: "why_now", label: "Why Now" },
+      { key: "execution", label: "Execution" },
+      { key: "deal_fit", label: "Deal Fit" },
+    ];
+    for (const dim of dims) {
+      const d = (rubric as any)[dim.key];
+      if (d?.score > 0) {
+        entries.push({
+          ts: "", agent: "Partner", action: `${dim.label}: ${d.score}/100`, detail: d.reasons?.[0] || "",
+          type: "score", score: d.score,
+        });
       }
     }
   }
 
-  // Aggregate tool totals
-  const tt: Record<string, number> = {};
-  for (const a of Object.values(agentTools)) for (const [k, v] of Object.entries(a)) tt[k] = (tt[k] || 0) + v;
-
-  // Timing
-  const ts0 = liveUpdates.length ? new Date(liveUpdates[0].ts).getTime() : 0;
-  const ts1 = liveUpdates.length ? new Date(liveUpdates[liveUpdates.length - 1].ts).getTime() : 0;
-  const dur = Math.round((ts1 - ts0) / 1000);
-  const durStr = dur > 60 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : `${dur}s`;
-  const totalCalls = Object.values(tt).reduce((s, v) => s + v, 0);
-
-  // SVG layout
-  const W = 560, H = 360;
-  const toolY = 40, anY = 135, asY = 225, ptY = 305;
-  const cx = [93, 280, 467];
-  const toolColor: Record<string, string> = { Specter: "#2563eb", Cala: "#26a69a", Tavily: "#ffa726" };
-  // Order by call volume — Specter first (primary), then Cala, then Tavily
-  const allTools = Object.entries(tt).sort((a, b) => b[1] - a[1]).map(([k]) => k);
-  const top3 = allTools.slice(0, 3);
-  // Ensure at least Specter and Cala are shown
-  if (!top3.includes("Specter")) top3.unshift("Specter");
-  if (!top3.includes("Cala")) top3.splice(1, 0, "Cala");
-  const toolNodes = top3.slice(0, 3).map((t, i) => ({ label: t, x: cx[i], y: toolY, calls: tt[t] || 0, color: toolColor[t] || "#90a4ae" }));
-  const anNodes = analysts.map((a, i) => ({ ...a, x: cx[i], y: anY }));
-  const decColor = decision === "STRONG_YES" ? "#2e7d32" : decision === "PASS" || decision === "KILL" ? "#c62828" : "#f57c00";
-
-  // Build edges
-  const edges: { x1: number; y1: number; x2: number; y2: number; w: number; c: string }[] = [];
-  // Orchestrator-level tool calls feed all analysts — draw edges to all 3 analyst nodes
-  const orch = agentTools["orchestrator"] || {};
-  for (const tn of toolNodes) {
-    const orchCalls = orch[tn.label] || 0;
-    if (orchCalls > 0) {
-      for (let ai = 0; ai < 3; ai++) {
-        edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[ai], y2: anY - 22, w: Math.min(orchCalls * 0.5, 3), c: tn.color });
-      }
-    }
-  }
-  // Per-agent tool calls (Dify agents calling tools directly)
-  for (let ai = 0; ai < 3; ai++) {
-    const at = agentTools[`analyst_${ai + 1}`] || {};
-    for (const tn of toolNodes) {
-      const calls = at[tn.label] || 0;
-      if (calls > 0) edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[ai], y2: anY - 22, w: Math.min(calls * 0.6, 4), c: tn.color });
-    }
-    if (anNodes[ai].factCount > 0) edges.push({ x1: cx[ai], y1: anY + 22, x2: cx[1], y2: asY - 18, w: Math.min(anNodes[ai].factCount * 0.4, 3), c: "#2563eb" });
-  }
-  // assoc tools
-  const ast = agentTools["associate"] || {};
-  for (const tn of toolNodes) { if (ast[tn.label]) edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[1], y2: asY - 18, w: 1, c: tn.color }); }
-  edges.push({ x1: cx[1], y1: asY + 18, x2: cx[1], y2: ptY - 18, w: 2, c: "#3b82f6" });
-  // partner tools
-  const ptt = agentTools["partner"] || {};
-  for (const tn of toolNodes) { if (ptt[tn.label]) edges.push({ x1: tn.x, y1: tn.y + 18, x2: cx[1], y2: ptY - 18, w: 1, c: tn.color }); }
+  const agentColor: Record<string, string> = {
+    "Market Analyst": "#2563eb", "Competition Analyst": "#7c3aed", "Traction Analyst": "#0891b2",
+    "Associate": "#d97706", "Partner": "#111827", "Orchestrator": "#6b7280", "Decision": "#16a34a", "System": "#6b7280"
+  };
+  const typeIcon: Record<string, string> = { research: "◎", evidence: "📄", analysis: "◇", decision: "◆", tool: "⚡", score: "★" };
 
   return (
-    <details className="swarm-details" open>
-      <summary className="swarm-summary">
-        <span className="swarm-title">Agent Swarm Activity</span>
-        <span className="swarm-meta">{totalCalls} tool calls · {durStr}</span>
+    <details className="timeline-details" open>
+      <summary className="timeline-summary">
+        <span className="timeline-title">Research Timeline</span>
+        <span className="timeline-meta">
+          {entries.length} events · {Object.entries(sourceMap).map(([k, v]) => `${v} ${k}`).join(", ")}
+        </span>
       </summary>
-      <svg viewBox={`0 0 ${W} ${H}`} className="swarm-svg">
-        <defs>
-          <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
-        </defs>
-
-        {/* Edges */}
-        {edges.map((e, i) => (
-          <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-            stroke={e.c} strokeWidth={e.w} strokeOpacity={0.35} className="swarm-edge" />
-        ))}
-
-        {/* Tool nodes */}
-        {toolNodes.map(t => (
-          <g key={t.label} filter="url(#glow)">
-            <circle cx={t.x} cy={t.y} r={16} fill={t.color} fillOpacity={0.12} stroke={t.color} strokeWidth={1.2} />
-            <text x={t.x} y={t.y - 1} textAnchor="middle" className="sw-label" fill={t.color}>{t.label}</text>
-            <text x={t.x} y={t.y + 9} textAnchor="middle" className="sw-stat">{t.calls}</text>
-          </g>
-        ))}
-
-        {/* Analyst nodes */}
-        {anNodes.map((a, i) => (
-          <g key={a.id} filter="url(#glow)">
-            <circle cx={a.x} cy={a.y} r={22} fill="#2563eb" fillOpacity={0.1} stroke="#2563eb" strokeWidth={1.3} />
-            <text x={a.x} y={a.y - 4} textAnchor="middle" className="sw-label" fill="#2563eb">{a.specialization}</text>
-            <text x={a.x} y={a.y + 8} textAnchor="middle" className="sw-stat">{a.factCount}f · {a.unknownCount}u</text>
-          </g>
-        ))}
-
-        {/* Associate */}
-        <g filter="url(#glow)">
-          <circle cx={cx[1]} cy={asY} r={20} fill="#3b82f6" fillOpacity={0.1} stroke="#3b82f6" strokeWidth={1.3} />
-          <text x={cx[1]} y={asY - 2} textAnchor="middle" className="sw-label" fill="#3b82f6">Associate</text>
-          <text x={cx[1]} y={asY + 10} textAnchor="middle" className="sw-stat">synthesis</text>
-        </g>
-
-        {/* Partner */}
-        <g filter="url(#glow)">
-          <circle cx={cx[1]} cy={ptY} r={20} fill={decColor} fillOpacity={0.12} stroke={decColor} strokeWidth={1.8} />
-          <text x={cx[1]} y={ptY - 2} textAnchor="middle" className="sw-label" fill={decColor}>Partner</text>
-          <text x={cx[1]} y={ptY + 10} textAnchor="middle" className="sw-stat">{avgScore}/100</text>
-        </g>
-
-        {/* Decision label */}
-        <text x={cx[1]} y={ptY + 32} textAnchor="middle" className="sw-decision" fill={decColor}>
-          {decision === "STRONG_YES" ? "● INVEST" : decision === "PROCEED_IF" ? "● PROCEED" : `● ${decision}`}
-        </text>
-
-        {/* Company name (center top) */}
-        <text x={cx[1]} y={14} textAnchor="middle" className="sw-company">{companyName}</text>
-      </svg>
+      <div className="timeline-container">
+        {/* Three lanes header */}
+        <div className="timeline-lanes-header">
+          <span className="tl-lane-label">Analysts</span>
+          <span className="tl-lane-label">Associate</span>
+          <span className="tl-lane-label">Partner</span>
+        </div>
+        <div className="timeline-scroll">
+          {entries.slice(-40).map((e, i) => {
+            const lane = e.agent.includes("Analyst") || e.agent === "Orchestrator" ? 0 : e.agent === "Associate" ? 1 : 2;
+            const color = agentColor[e.agent] || "#6b7280";
+            return (
+              <div key={i} className={`tl-row tl-lane-${lane}`} style={{ "--tl-color": color } as React.CSSProperties}>
+                <div className="tl-dot">{typeIcon[e.type] || "○"}</div>
+                <div className="tl-content">
+                  <span className="tl-agent" style={{ color }}>{e.agent}</span>
+                  <span className="tl-action" title={e.action}>{trunc(e.action, 80)}</span>
+                  {e.type === "score" && e.score !== undefined && (
+                    <span className={`tl-score ${scCls(e.score)}`}>{e.score}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </details>
   );
 }
@@ -408,7 +340,8 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
   decisionGate?: DashboardData["decision_gate"];
   dealInput?: any;
 }) {
-  // Update recommendation slide with Partner decision if available
+  const [copied, setCopied] = React.useState<string | null>(null);
+  
   const enriched = slides.map(s => {
     if (s.type === 'recommendation' && decision && decision !== 'PROCEED_IF') {
       const decLabel = decision === 'STRONG_YES' ? 'INVEST' : decision === 'PROCEED_IF' ? 'PROCEED WITH CONDITIONS' : decision;
@@ -485,169 +418,122 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
     return { md, companyName, now };
   };
 
-  const triggerDownload = (content: string, filename: string, mimeType: string) => {
-    // Strategy 1: Blob URL + anchor click (works in most standalone browsers)
-    let downloaded = false;
+  const triggerDownload = (content: string, filename: string, mimeType: string, label: string) => {
+    // In sandboxed ChatGPT iframes, blob URLs fail (BlobNotFound).
+    // Use data: URI in a new window — works reliably in all sandbox modes.
+    try {
+      const encoded = btoa(unescape(encodeURIComponent(content)));
+      const dataUri = `data:${mimeType};base64,${encoded}`;
+      // Open in new tab — browser will offer Save/Download
+      const w = window.open(dataUri, '_blank');
+      if (w) {
+        setCopied(`${label} opened`);
+        setTimeout(() => setCopied(null), 3000);
+        return;
+      }
+    } catch { /* data URI too large or popup blocked */ }
+
+    // Fallback: blob + anchor (works in dev / non-sandboxed)
     try {
       const blob = new Blob([content], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
-      a.style.display = 'none';
-      // Use target=_blank for iframe contexts
-      a.target = '_blank';
       document.body.appendChild(a);
       a.click();
-      downloaded = true;
-      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+      setCopied(`${label} downloading`);
+      setTimeout(() => setCopied(null), 3000);
+      return;
+    } catch { /* sandbox blocked */ }
+
+    // Last resort: copy to clipboard
+    try {
+      navigator.clipboard?.writeText(content).then(() => {
+        setCopied(`${label} copied to clipboard`);
+        setTimeout(() => setCopied(null), 3000);
+      });
     } catch {
-      // Blob URL failed — try next strategy
-    }
-
-    // Strategy 2: window.open with blob URL (works when anchor download is blocked in iframes)
-    if (!downloaded) {
-      try {
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const w = window.open(url, '_blank');
-        if (w) {
-          downloaded = true;
-          setTimeout(() => URL.revokeObjectURL(url), 60000);
-        }
-      } catch {
-        // window.open blocked — try next strategy
-      }
-    }
-
-    // Strategy 3: data URI in new window (last resort — works when blob URLs are fully blocked)
-    if (!downloaded) {
-      try {
-        const encoded = btoa(unescape(encodeURIComponent(content)));
-        window.open(`data:${mimeType};base64,${encoded}`, '_blank');
-      } catch {
-        // All strategies failed — copy to clipboard as last resort
-        try {
-          const clipPromise = navigator.clipboard?.writeText(content);
-          if (clipPromise) {
-            clipPromise.then(() => {
-              alert('Download blocked by browser. Content copied to clipboard instead.');
-            }).catch(() => {});
-          }
-        } catch { /* clipboard not available */ }
-      }
+      setCopied(`${label} failed`);
+      setTimeout(() => setCopied(null), 3000);
     }
   };
 
   const handleDownloadMd = () => {
     const { md, companyName, now } = buildMarkdown();
-    triggerDownload(md, `${companyName.replace(/[^a-zA-Z0-9]/g, '_')}_Memo_${now}.md`, 'text/markdown;charset=utf-8');
+    triggerDownload(md, `${companyName.replace(/[^a-zA-Z0-9]/g, '_')}_Memo_${now}.md`, 'text/markdown;charset=utf-8', '.md');
   };
 
   const handleDownloadPdf = () => {
-    const { companyName, now } = buildMarkdown();
-    const decLabel = decision === 'STRONG_YES' ? 'INVEST' : decision === 'PASS' || decision === 'KILL' ? decision : 'PROCEED WITH CONDITIONS';
-    const scColor = (n: number) => n >= 70 ? '#2e7d32' : n >= 40 ? '#f57c00' : '#c62828';
-
-    // Build styled HTML for print-to-PDF
-    let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Investment Memo — ${companyName}</title>
-<style>
-  @page { margin: 1.5cm; size: A4; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, sans-serif; color: #1a1a2e; line-height: 1.5; padding: 2rem; max-width: 800px; margin: 0 auto; }
-  .cover { text-align: center; padding: 3rem 0 2rem; border-bottom: 3px solid #2563eb; margin-bottom: 2rem; }
-  .cover h1 { font-size: 2rem; color: #1a1a2e; margin-bottom: 0.5rem; }
-  .cover .subtitle { font-size: 1.1rem; color: #666; }
-  .cover .decision-badge { display: inline-block; padding: 8px 24px; border-radius: 6px; font-weight: 700; font-size: 1.2rem; margin-top: 1rem; color: #fff; }
-  .score-row { display: flex; gap: 1rem; justify-content: center; margin: 1.5rem 0; flex-wrap: wrap; }
-  .score-item { text-align: center; min-width: 80px; }
-  .score-val { font-size: 1.8rem; font-weight: 700; }
-  .score-label { font-size: 0.75rem; color: #888; text-transform: uppercase; }
-  h2 { font-size: 1.3rem; color: #1a1a2e; margin: 2rem 0 0.8rem; padding-bottom: 0.3rem; border-bottom: 1px solid #e0e0e0; page-break-after: avoid; }
-  ul { padding-left: 1.5rem; margin: 0.5rem 0 1rem; }
-  li { margin: 0.3rem 0; font-size: 0.9rem; }
-  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.5rem; font-size: 0.85rem; }
-  th, td { padding: 6px 10px; border: 1px solid #ddd; text-align: left; }
-  th { background: #f5f5f5; font-weight: 600; }
-  .metrics-row { display: flex; gap: 1rem; margin: 0.5rem 0 1rem; flex-wrap: wrap; }
-  .metric { background: #f8f9fa; border-radius: 6px; padding: 8px 14px; text-align: center; min-width: 70px; }
-  .metric-val { font-size: 1.1rem; font-weight: 700; color: #1a1a2e; }
-  .metric-label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
-  .gating { background: #fff8e1; border-left: 3px solid #f57c00; padding: 8px 12px; margin: 0.3rem 0; font-size: 0.9rem; }
-  .footer { text-align: center; color: #aaa; font-size: 0.75rem; margin-top: 3rem; border-top: 1px solid #eee; padding-top: 1rem; }
-  @media print { body { padding: 0; } .no-print { display: none; } }
-</style></head><body>`;
-
-    // Cover
-    const decBg = decision === 'STRONG_YES' ? '#2e7d32' : decision === 'PASS' || decision === 'KILL' ? '#c62828' : '#f57c00';
-    html += `<div class="cover">
-      <h1>${companyName}</h1>
-      <div class="subtitle">Investment Memo — ${now}</div>
-      <div class="decision-badge" style="background:${decBg}">${decLabel} — ${avgScore}/100</div>
-    </div>`;
-
-    // Rubric scores row
-    if (rubric) {
-      html += `<div class="score-row">`;
-      for (const [dim, data] of Object.entries(rubric)) {
-        if (data && typeof data === 'object' && 'score' in data) {
-          html += `<div class="score-item"><div class="score-val" style="color:${scColor(data.score)}">${data.score}</div><div class="score-label">${dim.replace(/_/g, ' ')}</div></div>`;
-        }
-      }
-      html += `</div>`;
-    }
-
-    // Slides
-    for (const slide of enriched) {
-      if (slide.type === 'cover') continue; // skip cover, we made our own
-      const icon = slideIcons[slide.type] || '';
-      html += `<h2>${icon} ${slide.title}</h2>`;
-      if (slide.subtitle) html += `<p style="color:#666;font-style:italic;margin-bottom:0.5rem">${slide.subtitle}</p>`;
+    const companyName = dealInput?.name || dealInput?.company_name || 'Deal';
+    const now = new Date().toISOString().split('T')[0];
+    // Build a proper slide-deck HTML with styled pages
+    const slideHtml = enriched.map((slide, i) => {
+      const icon = slideIcons[slide.type] || '📄';
+      let metricsRow = '';
       if (slide.metrics && slide.metrics.length > 0) {
-        html += `<div class="metrics-row">${slide.metrics.map(m => `<div class="metric"><div class="metric-val">${m.value}</div><div class="metric-label">${m.label}</div></div>`).join('')}</div>`;
+        metricsRow = `<div style="display:flex;gap:24px;margin:12px 0;flex-wrap:wrap">${slide.metrics.map(m =>
+          `<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#1e293b">${m.value}</div><div style="font-size:11px;color:#64748b;text-transform:uppercase">${m.label}</div></div>`
+        ).join('')}</div>`;
       }
-      if (slide.bullets.length > 0) {
-        html += `<ul>${slide.bullets.map(b => `<li>${b}</li>`).join('')}</ul>`;
+      const bulletsHtml = slide.bullets.length > 0
+        ? `<ul style="margin:8px 0;padding-left:18px;color:#334155;font-size:13px;line-height:1.7">${slide.bullets.map(b => `<li>${b}</li>`).join('')}</ul>`
+        : '';
+      if (slide.type === 'cover') {
+        return `<div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);color:#fff;padding:60px 40px;min-height:280px;display:flex;flex-direction:column;justify-content:flex-end;border-radius:8px;margin-bottom:20px;page-break-after:always">
+          <h1 style="font-size:32px;margin:0 0 8px">${slide.title}</h1>
+          <p style="font-size:16px;opacity:0.8;margin:0">${slide.subtitle || ''}</p>
+          ${slide.bullets.map(b => `<p style="font-size:13px;opacity:0.6;margin:4px 0">${b}</p>`).join('')}
+        </div>`;
       }
-    }
+      return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:24px;margin-bottom:16px;page-break-inside:avoid">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <span style="font-size:10px;color:#94a3b8;font-weight:600">${String(i + 1).padStart(2, '0')}</span>
+          <span style="font-size:16px">${icon}</span>
+          <div><div style="font-size:16px;font-weight:600;color:#0f172a">${slide.title}</div>${slide.subtitle ? `<div style="font-size:12px;color:#64748b">${slide.subtitle}</div>` : ''}</div>
+        </div>
+        ${metricsRow}${bulletsHtml}
+      </div>`;
+    }).join('\n');
 
-    // Rubric table
+    // Add rubric scores table
+    let rubricHtml = '';
     if (rubric) {
-      html += `<h2>Rubric Scores</h2><table><tr><th>Dimension</th><th>Score</th><th>Key Reasons</th></tr>`;
-      for (const [dim, data] of Object.entries(rubric)) {
-        if (data && typeof data === 'object' && 'score' in data) {
+      rubricHtml = `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:24px;margin-bottom:16px;page-break-inside:avoid">
+        <h3 style="font-size:16px;font-weight:600;color:#0f172a;margin:0 0 12px">Rubric Scores</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f8fafc">
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0">Dimension</th>
+          <th style="text-align:center;padding:6px 8px;border-bottom:1px solid #e2e8f0">Score</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0">Key Reasons</th>
+        </tr></thead><tbody>
+        ${Object.entries(rubric).map(([dim, data]) => {
+          if (!data || typeof data !== 'object' || !('score' in data)) return '';
           const reasons = (data.reasons || []).slice(0, 2).join('; ');
-          html += `<tr><td style="text-transform:capitalize">${dim.replace(/_/g, ' ')}</td><td style="font-weight:700;color:${scColor(data.score)}">${data.score}/100</td><td>${reasons}</td></tr>`;
-        }
-      }
-      html += `</table>`;
+          const color = data.score >= 70 ? '#16a34a' : data.score >= 40 ? '#d97706' : '#dc2626';
+          return `<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${dim.replace(/_/g, ' ')}</td>
+            <td style="text-align:center;padding:6px 8px;border-bottom:1px solid #f1f5f9;font-weight:700;color:${color}">${data.score}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;color:#64748b;font-size:12px">${reasons}</td></tr>`;
+        }).join('')}
+        </tbody></table></div>`;
     }
 
-    // Gating questions
-    if (decisionGate && decisionGate.gating_questions && decisionGate.gating_questions.length > 0 && decisionGate.gating_questions[0] !== 'Pending...') {
-      html += `<h2>Gating Questions for IC</h2>`;
-      for (const q of decisionGate.gating_questions) html += `<div class="gating">${q}</div>`;
+    // Decision gate
+    let gateHtml = '';
+    if (decisionGate && decisionGate.decision) {
+      const gColor = decisionGate.decision === 'STRONG_YES' ? '#16a34a' : decisionGate.decision === 'PASS' || decisionGate.decision === 'KILL' ? '#dc2626' : '#d97706';
+      gateHtml = `<div style="border:2px solid ${gColor};border-radius:8px;padding:20px;margin-bottom:16px">
+        <div style="font-size:18px;font-weight:700;color:${gColor};margin-bottom:12px">Decision: ${decisionGate.decision}</div>
+        ${decisionGate.gating_questions?.length > 0 ? `<div style="font-size:14px;font-weight:600;margin-bottom:8px">Gating Questions</div><ol style="margin:0;padding-left:18px;font-size:13px;color:#334155;line-height:1.8">${decisionGate.gating_questions.map((q: string) => `<li>${q}</li>`).join('')}</ol>` : ''}
+      </div>`;
     }
 
-    html += `<div class="footer">Generated by DealBot — Cala + Specter + Dify — ${now}</div>`;
-    html += `</body></html>`;
-
-    // Strategy 1: Open in new window and trigger print dialog (best for PDF export)
-    try {
-      const printHtml = html + `<script>window.onload=function(){setTimeout(function(){window.print()},600)}</script>`;
-      const blob = new Blob([printHtml], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const w = window.open(url, '_blank');
-      if (w) {
-        setTimeout(() => URL.revokeObjectURL(url), 120000);
-        return; // success — print dialog will appear in the new tab
-      }
-    } catch { /* window.open blocked — try download fallback */ }
-
-    // Strategy 2: Download as HTML file with embedded print script
-    const downloadHtml = html + `<script>window.onload=function(){setTimeout(function(){window.print()},400)}</script>`;
-    triggerDownload(downloadHtml, `${companyName.replace(/[^a-zA-Z0-9]/g, '_')}_Memo_${now}.html`, 'text/html;charset=utf-8');
+    const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${companyName} — Investment Memo</title>
+      <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:0 auto;padding:20px;color:#0f172a}@media print{body{padding:0}}</style>
+    </head><body>${slideHtml}${rubricHtml}${gateHtml}
+      <div style="text-align:center;font-size:11px;color:#94a3b8;margin-top:24px;padding:12px;border-top:1px solid #e2e8f0">Generated by DealBot — ${now}</div>
+    </body></html>`;
+    triggerDownload(fullHtml, `${companyName.replace(/[^a-zA-Z0-9]/g, '_')}_Memo_${now}.html`, 'text/html;charset=utf-8', '.pdf');
   };
 
   return (
@@ -655,11 +541,11 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
       <summary className="memo-summary">
         <span className="memo-summary-title">Investment Memo</span>
         <span className="memo-summary-actions">
-          <button className="memo-download-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDownloadMd(); }} title="Download as Markdown">
-            .md
+          <button className="memo-download-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDownloadMd(); }} title="Download or copy Markdown memo">
+            {copied === '.md' || copied === '.md copied' ? "✓ Copied" : ".md"}
           </button>
-          <button className="memo-download-btn memo-download-pdf" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDownloadPdf(); }} title="Export as PDF">
-            .pdf
+          <button className="memo-download-btn memo-download-pdf" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDownloadPdf(); }} title="Download or copy HTML memo">
+            {copied === '.pdf' || copied === '.pdf copied' ? "✓ Copied" : ".pdf"}
           </button>
           <span className="memo-summary-meta">{slides.length} slides</span>
         </span>
@@ -667,7 +553,6 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
       <div className="memo-deck">
         {enriched.map((slide, i) => (
           <div key={i} className={`memo-slide memo-${slide.type}`}>
-            {/* Cover image */}
             {slide.imageUrl && (
               <div className="memo-cover-img" style={{ backgroundImage: `url(${slide.imageUrl})` }}>
                 <div className="memo-cover-overlay">
@@ -676,8 +561,6 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
                 </div>
               </div>
             )}
-
-            {/* Non-cover slides */}
             {!slide.imageUrl && (
               <>
                 <div className="memo-slide-header">
@@ -688,8 +571,6 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
                     {slide.subtitle && <div className="memo-slide-sub">{slide.subtitle}</div>}
                   </div>
                 </div>
-
-                {/* Metrics row */}
                 {slide.metrics && slide.metrics.length > 0 && (
                   <div className="memo-metrics">
                     {slide.metrics.map((m, j) => (
@@ -700,8 +581,6 @@ function InvestmentMemo({ slides, decision, avgScore, rubric, decisionGate, deal
                     ))}
                   </div>
                 )}
-
-                {/* Bullets */}
                 {slide.bullets.length > 0 && (
                   <ul className="memo-bullets">
                     {slide.bullets.map((b, j) => (
@@ -862,6 +741,8 @@ function DealDashboard() {
   const [retrying, setRetrying] = React.useState(false);
   const [showEvidence, setShowEvidence] = React.useState(false);
   const [showHistory, setShowHistory] = React.useState(false);
+  const [copied, setCopied] = React.useState<string | null>(null);
+  const [profiling, setProfiling] = React.useState(false);
   const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const failCountRef = React.useRef(0);
   const lastUpdateRef = React.useRef<number>(Date.now());
@@ -869,20 +750,38 @@ function DealDashboard() {
   const isRefreshing = refreshCall.isPending;
   const refresh = refreshCall.callTool;
 
+  // ── Persistent cache: localStorage survives Alpic cold starts ──
+  const cacheKey = (id: string) => `dealbot_state_${id}`;
+  const saveToCache = (id: string, data: any) => {
+    try { localStorage.setItem(cacheKey(id), JSON.stringify({ ...data, _cached_at: new Date().toISOString() })); } catch {}
+  };
+  const loadFromCache = (id: string): any => {
+    try { const raw = localStorage.getItem(cacheKey(id)); return raw ? JSON.parse(raw) : null; } catch { return null; }
+  };
+
   // Cache last successful refresh so UI never blanks between polls
   const cachedRef = React.useRef<any>(null);
   if (refreshCall.isSuccess && refreshCall.data?.structuredContent) {
     const sc = refreshCall.data.structuredContent as any;
-    // If server returned "not_found", stop polling — deal is gone
     if (sc.error === "not_found") {
+      // Server lost data — try localStorage fallback before giving up
+      const did = sc.deal_id || (input as any)?.deal_id || "";
+      if (did && !cachedRef.current) {
+        const cached = loadFromCache(did);
+        if (cached) {
+          cachedRef.current = { ...cached, _from_cache: true };
+        }
+      }
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     } else {
       cachedRef.current = sc;
-      failCountRef.current = 0; // reset on success
+      failCountRef.current = 0;
       lastUpdateRef.current = Date.now();
+      // Persist to localStorage for cold-start recovery
+      const did = sc.deal_id || (input as any)?.deal_id || "";
+      if (did) saveToCache(did, sc);
     }
   }
-  // Track failed polls (isError on callTool)
   if (refreshCall.isError) {
     failCountRef.current++;
     if (failCountRef.current >= 3 && pollRef.current) {
@@ -919,21 +818,38 @@ function DealDashboard() {
 
   if (!d) return null;
 
-  if (d.error === "not_found") {
+  if (d.error === "not_found" && !(d as any)._from_cache) {
+    // No cached data available — show unavailable message
     const companyHint = (input as any)?.company_name || (input as any)?.deal_id || "";
+    const dealIdHint = (input as any)?.deal_id || d.deal_id || "";
     return (
       <div className="widget deal-pipe">
-        <div className="pipe-header">
-          <div className="pipe-title">Deal Expired</div>
-          <div className="pipe-subtitle">This deal session has expired. Re-run the analysis to get fresh results.</div>
+        <div className="pipe-header" style={{ textAlign: "center", padding: "32px 24px" }}>
+          <div style={{ fontSize: 32, marginBottom: 8, opacity: 0.5 }}>⟳</div>
+          <div className="pipe-title" style={{ fontSize: 18 }}>Session Unavailable</div>
+          <div className="pipe-subtitle" style={{ maxWidth: 400, margin: "8px auto", lineHeight: 1.5 }}>
+            This deal analysis session is no longer cached on the server. On serverless infrastructure, data is ephemeral between cold starts.
+          </div>
+          {dealIdHint && (
+            <div style={{ fontSize: 11, opacity: 0.4, fontFamily: "monospace", marginTop: 8 }}>
+              {dealIdHint}
+            </div>
+          )}
         </div>
-        <button className="cp-btn-process" onClick={() => {
-          sendFollowUp(companyHint
-            ? `Analyze the company "${companyHint}" — use analyze_deal tool`
-            : "Start a new deal analysis — ask me which company");
-        }}>
-          Re-analyze
-        </button>
+        <div style={{ display: "flex", gap: 8, padding: "0 24px 24px", justifyContent: "center" }}>
+          <button className="cp-btn-process" style={{ maxWidth: 200 }} onClick={() => {
+            sendFollowUp(companyHint
+              ? `Analyze the company "${companyHint}" — use analyze_deal tool`
+              : "Start a new deal analysis — ask me which company");
+          }}>
+            Re-analyze
+          </button>
+          <button className="action-btn" style={{ padding: "8px 16px" }} onClick={() => {
+            sendFollowUp("Show me my recent deal analysis history");
+          }}>
+            View History
+          </button>
+        </div>
       </div>
     );
   }
@@ -968,9 +884,10 @@ function DealDashboard() {
       {/* ═══ HEADER ═══ */}
       <div className="pipe-header">
         <div>
+          <div className="pipe-label">Deal Analysis Run{(d as any)._from_cache ? <span style={{ marginLeft: 8, fontSize: 10, color: '#9ca3af', background: '#f3f4f6', padding: '1px 6px', borderRadius: 4 }}>cached snapshot</span> : null}</div>
           <div className="pipe-title">{d.deal_input?.name || "Deal"}</div>
           <div className="pipe-subtitle">
-            {d.evidence?.length || 0} evidence{d.company_profile?.domain ? ` · ${d.company_profile.domain}` : ""}
+            {d.created_at ? new Date(d.created_at).toLocaleDateString() : 'Today'} · {d.evidence?.length || 0} evidence{d.company_profile?.domain ? ` · ${d.company_profile.domain}` : ""}
             {isComplete ? " · Complete" : ""}
             {!isComplete && (
               <span className="live-inline">
@@ -1004,44 +921,48 @@ function DealDashboard() {
           <button className="action-btn" onClick={() => {
             setShowHistory(!showHistory);
             if (!showHistory) listDeals.callTool({});
-          }}>
-            {showHistory ? "×" : "History"}
+          }} title="View history of deal analysis runs">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle" }}>
+              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+            </svg>
           </button>
         </div>
       </div>
 
       {/* ═══ HISTORY SIDE PANEL ═══ */}
-      {showHistory && (
-        <div className="history-panel">
-          <div className="history-header">
-            <span className="history-title">Deal Runs</span>
-            <button className="history-close" onClick={() => setShowHistory(false)}>×</button>
-          </div>
-          <div className="history-list">
-            {listDeals.isPending && <div className="history-loading"><span className="cp-spinner" /> Loading...</div>}
-            {listDeals.isSuccess && (() => {
-              const deals = (listDeals.data?.structuredContent as any)?.deals || [];
-              if (deals.length === 0) return <div className="history-empty">No deal runs found</div>;
-              return deals.slice(0, 20).map((deal: any) => (
-                <button
-                  key={deal.deal_id}
-                  className={`history-item ${deal.deal_id === dealId ? 'history-item-active' : ''}`}
-                  onClick={() => {
-                    refresh({ deal_id: deal.deal_id });
-                    setShowHistory(false);
-                  }}
-                >
-                  <div className="history-item-name">{deal.name || deal.domain || deal.deal_id.slice(0, 8)}</div>
-                  <div className="history-item-meta">
-                    {deal.decision && <span className={`history-decision ${decCls(deal.decision)}`}>{deal.decision}</span>}
-                    <span className="history-item-date">{deal.created_at ? new Date(deal.created_at).toLocaleDateString() : ''}</span>
-                  </div>
-                </button>
-              ));
-            })()}
-          </div>
+      <div className={`history-backdrop ${showHistory ? 'history-backdrop-open' : ''}`} onClick={() => setShowHistory(false)} />
+      <div className={`history-panel ${showHistory ? 'history-panel-open' : ''}`}>
+        <div className="history-header">
+          <span className="history-title">Deal History</span>
+          <button className="history-close" onClick={() => setShowHistory(false)}>×</button>
         </div>
-      )}
+        <div className="history-list">
+          {listDeals.isPending && <div className="history-loading"><span className="cp-spinner" /> Loading history...</div>}
+          {listDeals.isSuccess && (() => {
+            const deals = (listDeals.data?.structuredContent as any)?.deals || [];
+            if (deals.length === 0) return <div className="history-empty">No deal runs found</div>;
+            return deals.slice(0, 20).map((deal: any) => (
+              <button
+                key={deal.id || deal.deal_id}
+                className={`history-item ${deal.id === dealId || deal.deal_id === dealId ? 'history-item-active' : ''}`}
+                onClick={() => {
+                  refresh({ deal_id: deal.id || deal.deal_id });
+                  setShowHistory(false);
+                }}
+              >
+                <div className="history-item-name">{deal.name || deal.domain || deal.id || deal.deal_id}</div>
+                <div className="history-item-meta">
+                  {deal.latest_decision && <span className={`history-decision ${decCls(deal.latest_decision)}`}>{deal.latest_decision}</span>}
+                  <span className="history-item-date">{deal.updated_at ? new Date(deal.updated_at).toLocaleDateString() : ''}</span>
+                </div>
+                <div className="history-item-stats">
+                  {deal.evidence_count || 0} evidence · {deal.latest_avg_score ? `${deal.latest_avg_score}/100` : 'No score'}
+                </div>
+              </button>
+            ));
+          })()}
+        </div>
+      </div>
 
       {/* ═══ INVESTOR PROFILE BADGE ═══ */}
       <InvestorProfileBadge
@@ -1182,7 +1103,7 @@ function DealDashboard() {
           {pl.partner.status === "pending" && <span className="toggle-stats dim">awaiting synthesis</span>}
         </summary>
         <div className="toggle-feed">
-          {/* Sub-task tracker (same pattern) */}
+          {/* Sub-task tracker */}
           <SubTaskFeed
             feed={feedForPhase(liveUpdates, "partner")}
             isDone={pl.partner.status === "done" || hasScores}
@@ -1201,6 +1122,19 @@ function DealDashboard() {
             ]} />
           )}
 
+          {/* Rubric scores breakdown */}
+          {hasScores && (
+            <div className="partner-rubric-table">
+              {Object.entries(r).map(([dim, data]) => (
+                <div key={dim} className="rubric-row">
+                  <span className="rubric-dim">{dim.replace(/_/g, ' ')}</span>
+                  <span className={`rubric-score ${scCls(data.score)}`}>{data.score}/100</span>
+                  <span className="rubric-reason">{data.reasons?.[0] ? trunc(data.reasons[0], 80) : ''}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Top reasons */}
           {hasScores && (
             <div className="partner-reasons">
@@ -1208,6 +1142,11 @@ function DealDashboard() {
                 <div key={i} className="feed-fact">{trunc(reason, 90)}</div>
               ))}
             </div>
+          )}
+
+          {/* Fallback: Partner done but no scores yet */}
+          {pl.partner.status === "done" && !hasScores && feedForPhase(liveUpdates, "partner").length === 0 && (
+            <div className="feed-item feed-done">Partner review complete — scores pending</div>
           )}
         </div>
       </details>
@@ -1229,19 +1168,21 @@ function DealDashboard() {
         </>
       )}
 
-      {/* ═══ SWARM MIND MAP ═══ */}
-      {isComplete && liveUpdates.length > 5 && (
-        <SwarmMap
+      {/* ═══ RESEARCH TIMELINE ═══ */}
+      {liveUpdates.length > 3 && (
+        <ResearchTimeline
           liveUpdates={liveUpdates}
           analysts={pl.analysts}
+          associate={pl.associate}
+          partner={pl.partner}
+          rubric={d.rubric}
           decision={dg?.decision || "PENDING"}
-          companyName={d.deal_input?.name || "Deal"}
-          avgScore={avgScore}
+          evidence={d.evidence || []}
         />
       )}
 
       {/* ═══ ACTIONS ═══ */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
         {!isComplete && (
           <button className="action-btn action-btn-primary" onClick={() => {
             if (dealId) { failCountRef.current = 0; refresh({ deal_id: dealId }); }
@@ -1250,14 +1191,16 @@ function DealDashboard() {
           </button>
         )}
         {d.company_profile?.domain && (
-          <button className="action-btn" onClick={() =>
-            sendFollowUp(`Call the company-profile tool with domain="${d.company_profile.domain}". Do not add commentary.`)
-          }>
-            Company Profile
+          <button className="action-btn" onClick={() => {
+            setProfiling(true);
+            sendFollowUp(`Call the company-profile tool with domain="${d.company_profile.domain}". Do not add commentary.`);
+            setTimeout(() => setProfiling(false), 3000);
+          }} disabled={profiling}>
+            {profiling ? "Opening…" : "Company Profile"}
           </button>
         )}
         {d.evidence?.length > 0 && (
-          <button className="action-btn" onClick={() => setShowEvidence(prev => !prev)}>
+          <button className={`action-btn ${showEvidence ? 'action-btn-active' : ''}`} onClick={() => setShowEvidence(prev => !prev)}>
             {showEvidence ? "Hide Evidence" : `Evidence (${d.evidence.length})`}
           </button>
         )}

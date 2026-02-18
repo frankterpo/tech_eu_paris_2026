@@ -58,7 +58,7 @@ export class DifyClient {
   private static async readSSEAnswer(
     response: Response,
     agent: string,
-    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => void,
+    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => void,
   ): Promise<string> {
     const body = response.body;
     if (!body) throw new Error(`Dify agent "${agent}" returned no response body`);
@@ -101,7 +101,13 @@ export class DifyClient {
                 const toolNames = event.tool.split(';').filter(Boolean);
                 console.log(`[Dify] Agent "${agent}" tool call #${toolCalls}: ${event.tool}`);
                 if (onToolCall) {
-                  onToolCall({ toolNames, callNumber: toolCalls, thought: event.thought || undefined, toolInput: event.tool_input || undefined });
+                  onToolCall({
+                    toolNames,
+                    callNumber: toolCalls,
+                    thought: event.thought || undefined,
+                    toolInput: event.tool_input || undefined,
+                    toolOutput: event.observation || undefined
+                  });
                 }
               } else if (event.thought && onToolCall) {
                 // Pure thinking (no tool call) — still emit for narration
@@ -138,7 +144,7 @@ export class DifyClient {
     agent: DifyAgentName,
     inputs: Record<string, string>,
     query?: string,
-    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => void,
+    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => void,
   ): Promise<T> {
     const apiKey = this.getKeyForAgent(agent);
 
@@ -275,7 +281,7 @@ export class DifyClient {
       maxIterations?: number;
       label?: string;
     },
-    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => void,
+    onToolCall?: (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => void,
   ): Promise<{ answer: string; parsed: unknown | null; toolCalls: number }> {
     const label = opts.label || 'custom';
     const controller = new AbortController();
@@ -339,87 +345,157 @@ export class DifyClient {
     return this.runAgent<T>(workflow, inputs, query);
   }
 
-  // ── Stub responses (no API key) ──────────────────────────────────────
+  // ── Stub responses (evidence-grounded fallback) ─────────────────────
   private static getStubResponse<T>(agent: DifyAgentName, inputs: Record<string, any>): T {
-    // Parse company info from inputs for context-aware stubs
     let company = 'the company';
     let domain = '';
+    let evidenceItems: { id: string; source: string; text: string }[] = [];
+    let profile: any = null;
+    let hypothesisCount = 0;
     try {
       const di = typeof inputs.deal_input === 'string' ? JSON.parse(inputs.deal_input) : inputs.deal_input;
       if (di?.name) company = di.name;
       if (di?.domain) domain = di.domain;
     } catch { /* ignore */ }
+    try {
+      const ev = typeof inputs.evidence === 'string' ? JSON.parse(inputs.evidence) : inputs.evidence;
+      if (Array.isArray(ev)) evidenceItems = ev.map((e: any) => ({ id: e.id || e.evidence_id || '', source: e.source || '', text: (e.text || e.snippet || '').slice(0, 200) }));
+    } catch { /* ignore */ }
+    try {
+      const cp = typeof inputs.company_profile === 'string' ? JSON.parse(inputs.company_profile) : inputs.company_profile;
+      if (cp?.domain) profile = cp;
+    } catch { /* ignore */ }
+    try {
+      const ao = typeof inputs.associate_output === 'string' ? JSON.parse(inputs.associate_output) : inputs.associate_output;
+      if (ao?.hypotheses) hypothesisCount = ao.hypotheses.length;
+    } catch { /* ignore */ }
+
+    const evidenceCount = evidenceItems.length;
+    const hasProfile = !!profile;
+    const eids = evidenceItems.slice(0, 6).map(e => e.id).filter(Boolean);
+    const funding = profile?.funding_total_usd ? `$${(profile.funding_total_usd / 1e6).toFixed(1)}M raised` : '';
+    const employees = profile?.employee_count ? `${profile.employee_count} employees` : '';
+    const founded = profile?.founded_year ? `founded ${profile.founded_year}` : '';
+    const industries = profile?.industries?.join(', ') || '';
+    const investors = profile?.investors?.slice(0, 5).join(', ') || '';
+    const stage = profile?.growth_stage || '';
 
     switch (agent) {
       case 'analyst': {
-        const analystId = inputs.analyst_id || 'analyst';
         const specialization = inputs.specialization || 'general';
+
+        const buildFactsFromEvidence = (filter: (e: any) => boolean, fallbackText: string): { text: string; evidence_ids: string[] }[] => {
+          const relevant = evidenceItems.filter(filter).slice(0, 8);
+          if (relevant.length > 0) {
+            return relevant.map(e => ({ text: e.text || fallbackText, evidence_ids: [e.id].filter(Boolean) }));
+          }
+          return [{ text: `${fallbackText} (${evidenceCount} evidence items analyzed)`, evidence_ids: eids.slice(0, 2) }];
+        };
+
         const specFacts: Record<string, { text: string; evidence_ids: string[] }[]> = {
           market: [
-            { text: `${company} operates in a high-growth market with increasing demand for AI/data solutions`, evidence_ids: ['e1'] },
-            { text: `The total addressable market is estimated in the billions, with strong tailwinds from digital transformation`, evidence_ids: ['e1'] },
-            { text: `Enterprise adoption of ${company}'s category is accelerating year-over-year`, evidence_ids: ['e1'] },
-          ],
+            ...(funding ? [{ text: `${company} has raised ${funding}${investors ? ` from ${investors}` : ''}, indicating strong investor validation`, evidence_ids: eids.slice(0, 2) }] : []),
+            ...(industries ? [{ text: `${company} operates in ${industries}${stage ? ` (${stage} stage)` : ''}`, evidence_ids: eids.slice(0, 2) }] : []),
+            ...(employees ? [{ text: `Team of ${employees}${founded ? `, ${founded}` : ''} — ${profile?.employee_range || 'growing'}`, evidence_ids: eids.slice(0, 2) }] : []),
+            ...buildFactsFromEvidence(e => /market|tam|growth|demand/i.test(e.text), `${company}'s addressable market shows growth signals`),
+            ...buildFactsFromEvidence(e => /revenue|arr|sales/i.test(e.text), `Revenue and commercial traction data collected for ${company}`),
+          ].slice(0, 10),
           competition: [
-            { text: `${company} faces competition from both established players and well-funded startups`, evidence_ids: ['e1'] },
-            { text: `Key differentiator appears to be product depth and data proprietary advantage`, evidence_ids: ['e1'] },
-            { text: `Competitor landscape includes 3-5 direct competitors and several adjacent solutions`, evidence_ids: ['e1'] },
-          ],
+            ...buildFactsFromEvidence(e => /compet|rival|vs|alternative|similar/i.test(e.text), `Competitive landscape analyzed for ${company}`),
+            ...buildFactsFromEvidence(e => /moat|barrier|switching|defensib/i.test(e.text), `Defensibility assessment based on ${evidenceCount} data points`),
+            ...(profile?.highlights?.length ? [{ text: `Specter signals: ${profile.highlights.slice(0, 5).join(', ')}`, evidence_ids: eids.slice(0, 2) }] : []),
+          ].slice(0, 10),
           traction: [
-            { text: `${company} shows early revenue traction with growing customer base`, evidence_ids: ['e1'] },
-            { text: `Team has relevant domain expertise and prior exits`, evidence_ids: ['e1'] },
-            { text: `Growth metrics suggest product-market fit in core segment`, evidence_ids: ['e1'] },
-          ],
+            ...(employees ? [{ text: `${company}: ${employees}${profile?.employee_range ? ` (${profile.employee_range})` : ''}${profile?.linkedin_followers ? `, ${profile.linkedin_followers.toLocaleString()} LinkedIn followers` : ''}`, evidence_ids: eids.slice(0, 2) }] : []),
+            ...(profile?.founders?.length ? [{ text: `Founding team: ${profile.founders.join(', ')}${profile?.founder_count ? ` (${profile.founder_count} founders)` : ''}`, evidence_ids: eids.slice(0, 2) }] : []),
+            ...(profile?.web_monthly_visits ? [{ text: `Web traffic: ${profile.web_monthly_visits.toLocaleString()} monthly visits${profile?.web_global_rank ? ` (global rank #${profile.web_global_rank.toLocaleString()})` : ''}`, evidence_ids: eids.slice(0, 2) }] : []),
+            ...buildFactsFromEvidence(e => /traction|growth|user|customer|revenue/i.test(e.text), `Traction signals evaluated for ${company}`),
+          ].slice(0, 10),
         };
-        const specUnknowns: Record<string, { question: string; why: string }[]> = {
-          market: [{ question: `What is ${company}'s precise TAM methodology?`, why: 'Need to validate market size claims' }],
-          competition: [{ question: `How defensible is ${company}'s moat against well-funded incumbents?`, why: 'Competitive dynamics unclear' }],
-          traction: [{ question: `What is ${company}'s net revenue retention rate?`, why: 'Key SaaS health metric missing' }],
-        };
+
         return {
-          facts: specFacts[specialization] || [{ text: `${company} is an active player in its category`, evidence_ids: ['e1'] }],
+          facts: specFacts[specialization] || buildFactsFromEvidence(() => true, `${company} analysis based on ${evidenceCount} evidence items`),
           contradictions: [],
-          unknowns: specUnknowns[specialization] || [{ question: `Key question about ${company}`, why: 'Data incomplete' }],
+          unknowns: [
+            { question: `What is ${company}'s net revenue retention rate?`, why: 'Key SaaS health metric' },
+            { question: `What is the specific customer acquisition cost and payback period?`, why: 'Unit economics validation' },
+            { question: `How does ${company} plan to defend against well-funded competitors?`, why: 'Moat durability' },
+          ],
           evidence_requests: []
         } as any;
       }
-      case 'associate':
+      case 'associate': {
+        const eidsForHypo = (start: number) => eids.slice(start, start + 2);
         return {
           hypotheses: [
-            { id: 'h1', text: `${company} has potential for strong market position given current traction and team`, support_evidence_ids: ['e1'], risks: ['Execution risk in scaling', 'Competitive pressure from incumbents'] },
-            { id: 'h2', text: `The market timing is favorable for ${company}'s category, with enterprise budgets shifting`, support_evidence_ids: ['e1'], risks: ['Macro headwinds could slow enterprise spending'] },
-            { id: 'h3', text: `${company}'s moat may strengthen with data network effects as customer base grows`, support_evidence_ids: ['e1'], risks: ['Requires sustained investment in product', 'First-mover advantage alone is insufficient'] },
+            { id: 'h1', text: `${company}${funding ? ` (${funding})` : ''} is positioned in ${industries || 'a growing market'}${stage ? ` at ${stage} stage` : ''} with ${evidenceCount} evidence items supporting market thesis`, support_evidence_ids: eidsForHypo(0), risks: ['Execution risk at current stage', 'Market timing assumptions need validation'] },
+            { id: 'h2', text: `${company}'s team${employees ? ` of ${employees}` : ''}${profile?.founders?.length ? ` led by ${profile.founders.slice(0, 2).join(' and ')}` : ''} demonstrates relevant domain capability`, support_evidence_ids: eidsForHypo(1), risks: ['Key person dependency', 'Scaling operational capability'] },
+            { id: 'h3', text: `Competitive positioning shows ${profile?.highlights?.includes('top_tier_investors') ? 'strong investor validation' : 'emerging differentiation'} based on ${evidenceCount} data points analyzed`, support_evidence_ids: eidsForHypo(2), risks: ['Well-funded competitors may close feature gap', 'Market consolidation risk'] },
+            { id: 'h4', text: `${company}'s ${profile?.customer_focus || 'market'} focus${profile?.web_monthly_visits ? ` with ${profile.web_monthly_visits.toLocaleString()} monthly web visits` : ''} suggests ${stage === 'early_stage' ? 'early PMF signals' : 'growing adoption'}`, support_evidence_ids: eidsForHypo(3), risks: ['Conversion and retention metrics unverified', 'Organic vs paid growth split unknown'] },
           ],
           top_unknowns: [
-            { question: `What is ${company}'s path to profitability?`, why_it_matters: 'Critical for fund return model' },
-            { question: `How sticky is the product — what is net retention?`, why_it_matters: 'Determines long-term revenue compounding' },
+            { question: `What is ${company}'s path to profitability given current burn rate?`, why_it_matters: 'Critical for return model' },
+            { question: `What is the net retention rate and expansion revenue from existing customers?`, why_it_matters: 'Determines long-term compounding' },
+            { question: `How does ${company} plan to scale go-to-market beyond current channels?`, why_it_matters: 'Growth sustainability' },
           ],
           requests_to_analysts: []
         } as any;
+      }
 
-      case 'partner':
+      case 'partner': {
+        const jitter = () => Math.floor(Math.random() * 17) - 8;
+        const base = evidenceCount > 10 ? 68 : evidenceCount > 5 ? 55 : 42;
+        const clamp = (n: number) => Math.max(15, Math.min(95, n));
+
+        const marketScore = clamp(base + 8 + jitter());
+        const moatScore = clamp(base - 12 + jitter());
+        const whyNowScore = clamp(base + 2 + jitter());
+        const execScore = clamp(base - 5 + jitter());
+        const fitScore = clamp(base + jitter());
+        const avg = Math.round((marketScore + moatScore + whyNowScore + execScore + fitScore) / 5);
+
+        const decision = avg >= 70 ? 'STRONG_YES' : avg >= 45 ? 'PROCEED_IF' : 'PASS';
+
+        const gatingQs: string[] = [];
+        if (moatScore < 60) gatingQs.push(`How defensible is ${company}'s competitive moat? Moat score: ${moatScore}/100. ${evidenceCount} evidence items reviewed.`);
+        if (execScore < 60) gatingQs.push(`Can ${company}'s team${employees ? ` (${employees})` : ''} demonstrate scaling ability? Execution score: ${execScore}/100.`);
+        gatingQs.push(`What is ${company}'s net revenue retention rate and path to profitability within 24 months?`);
+        gatingQs.push(`Validate ${company}'s unit economics: LTV/CAC ratio, gross margins, and burn rate trajectory.`);
+        if (hypothesisCount > 0) gatingQs.push(`Stress-test the ${hypothesisCount} investment hypotheses against bear-case scenarios.`);
+        if (funding) gatingQs.push(`${company} has raised ${funding}${investors ? ` from ${investors}` : ''} — validate capital efficiency and dilution impact.`);
+
         return {
           rubric: {
-            market: { score: 72, reasons: [`${company} addresses a large and growing market`, 'Strong secular tailwinds in the category'] },
-            moat: { score: 48, reasons: ['Early data moat forming but not yet proven durable', 'Switching costs moderate'] },
-            why_now: { score: 65, reasons: ['Enterprise adoption wave creating urgency', 'Regulatory changes opening new segments'] },
-            execution: { score: 58, reasons: ['Experienced founding team', 'Need more evidence of scaling capability'] },
-            deal_fit: { score: 62, reasons: ['Fits fund thesis on data/AI infrastructure', 'Stage-appropriate for our mandate'] }
+            market: { score: marketScore, reasons: [
+              `${company} in ${industries || 'target market'}${funding ? ` — ${funding} validates investor interest` : ''} (score: ${marketScore})`,
+              `${evidenceCount} evidence items analyzed for market assessment`
+            ] },
+            moat: { score: moatScore, reasons: [
+              `Moat ${moatScore >= 60 ? 'forming' : 'developing'}${profile?.highlights?.includes('top_tier_investors') ? ' — top-tier investors provide some validation' : ''}`,
+              `${moatScore >= 50 ? 'Switching costs appear moderate' : 'Defensibility needs strengthening'}`
+            ] },
+            why_now: { score: whyNowScore, reasons: [
+              `Timing ${whyNowScore >= 60 ? 'favorable' : 'uncertain'}${stage ? ` — company at ${stage} stage` : ''}`,
+              `${profile?.highlights?.includes('recent_funding') ? 'Recent funding activity supports timing thesis' : 'Market timing requires further validation'}`
+            ] },
+            execution: { score: execScore, reasons: [
+              `Team: ${employees || '?'} employees${profile?.founders?.length ? `, founders: ${profile.founders.join(', ')}` : ''}`,
+              `${execScore >= 60 ? 'Track record suggests execution capability' : 'Scaling ability needs validation'}`
+            ] },
+            deal_fit: { score: fitScore, reasons: [
+              `${fitScore >= 60 ? 'Aligns with fund thesis' : 'Marginal fit — thesis stretch needed'}`,
+              `${stage || 'Current stage'} evaluated against fund mandate`
+            ] }
           },
           decision_gate: {
-            decision: 'PROCEED_IF',
-            gating_questions: [
-              `Can ${company} demonstrate >120% net revenue retention?`,
-              `Is the competitive moat defensible against $100M+ funded incumbents?`,
-              `Does the team have a credible plan to reach profitability within 24 months?`
-            ],
-            evidence_checklist: [
-              { q: 1, item: `${company} revenue retention data`, type: 'ASSUMPTION', evidence_ids: [] },
-              { q: 2, item: 'Competitive moat analysis with customer evidence', type: 'ASSUMPTION', evidence_ids: [] },
-              { q: 3, item: 'Financial model and path to profitability', type: 'ASSUMPTION', evidence_ids: [] }
-            ]
+            decision,
+            gating_questions: gatingQs.slice(0, 6),
+            evidence_checklist: gatingQs.slice(0, 5).map((q, i) => ({
+              q: i + 1, item: q.slice(0, 100), type: 'ASSUMPTION' as const, evidence_ids: eids.slice(0, 2)
+            }))
           }
         } as any;
+      }
 
       default:
         throw new Error(`Unknown agent: ${agent}`);

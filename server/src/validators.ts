@@ -91,6 +91,77 @@ export const PartnerOutputSchema = z.object({
 });
 export type PartnerOutput = z.infer<typeof PartnerOutputSchema>;
 
+// ─── Coerce raw LLM output before Zod validation ────────────────────────
+// LLMs (especially gpt-4o-mini) often return almost-valid output.
+// This normalizes common deviations so validation succeeds on first attempt.
+
+const DECISION_MAP: Record<string, 'KILL' | 'PROCEED' | 'PROCEED_IF'> = {
+  KILL: 'KILL', PASS: 'KILL', NO: 'KILL', REJECT: 'KILL',
+  PROCEED: 'PROCEED', YES: 'PROCEED', STRONG_YES: 'PROCEED', APPROVE: 'PROCEED',
+  PROCEED_IF: 'PROCEED_IF', CONDITIONAL: 'PROCEED_IF', MAYBE: 'PROCEED_IF',
+};
+
+export function coercePartnerOutput(raw: any): any {
+  if (!raw || typeof raw !== 'object') return raw;
+  const out = structuredClone(raw);
+
+  if (out.decision_gate && typeof out.decision_gate === 'object') {
+    const dg = out.decision_gate;
+
+    // Normalize decision value
+    if (typeof dg.decision === 'string') {
+      const key = dg.decision.toUpperCase().replace(/[^A-Z_]/g, '');
+      dg.decision = DECISION_MAP[key] || 'PROCEED_IF';
+    }
+
+    // Cap gating_questions to exactly 3
+    if (Array.isArray(dg.gating_questions)) {
+      if (dg.gating_questions.length > 3) {
+        dg.gating_questions = dg.gating_questions.slice(0, 3);
+      }
+      while (dg.gating_questions.length < 3) {
+        dg.gating_questions.push('Additional due diligence required');
+      }
+    }
+
+    // Clamp evidence_checklist q values to 1-3 and cap at 15
+    if (Array.isArray(dg.evidence_checklist)) {
+      dg.evidence_checklist = dg.evidence_checklist.slice(0, 15).map((item: any) => ({
+        ...item,
+        q: typeof item.q === 'number' ? Math.max(1, Math.min(3, item.q)) : 1,
+        evidence_ids: Array.isArray(item.evidence_ids) ? item.evidence_ids : [],
+      }));
+    }
+  }
+
+  // Cap rubric reasons to 4 per dimension
+  if (out.rubric && typeof out.rubric === 'object') {
+    for (const dim of ['market', 'moat', 'why_now', 'execution', 'deal_fit']) {
+      if (out.rubric[dim]?.reasons?.length > 4) {
+        out.rubric[dim].reasons = out.rubric[dim].reasons.slice(0, 4);
+      }
+    }
+  }
+
+  return out;
+}
+
+export function coerceAnalystOutput(raw: any): any {
+  if (!raw || typeof raw !== 'object') return raw;
+  const out = structuredClone(raw);
+  if (Array.isArray(out.facts) && out.facts.length > 12) out.facts = out.facts.slice(0, 12);
+  if (Array.isArray(out.contradictions) && out.contradictions.length > 8) out.contradictions = out.contradictions.slice(0, 8);
+  if (Array.isArray(out.unknowns) && out.unknowns.length > 8) out.unknowns = out.unknowns.slice(0, 8);
+  return out;
+}
+
+export function coerceAssociateOutput(raw: any): any {
+  if (!raw || typeof raw !== 'object') return raw;
+  const out = structuredClone(raw);
+  if (Array.isArray(out.hypotheses) && out.hypotheses.length > 6) out.hypotheses = out.hypotheses.slice(0, 6);
+  return out;
+}
+
 // ─── Evidence rule enforcement ──────────────────────────────────────────
 // Spec (06_VALIDATION_NO_SLOP.md): facts asserting a claim with no evidence_ids
 // must be converted to ASSUMPTION in the checklist.

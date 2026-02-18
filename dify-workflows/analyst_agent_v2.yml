@@ -263,8 +263,27 @@ model_config:
       tool_label: Cala List Triggers
       tool_name: calaListTriggers
       tool_parameters: {}
-  annotation_reply:
-    enabled: false
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: duckduckgo
+      provider_name: duckduckgo
+      provider_type: builtin
+      tool_label: DuckDuckGo Search
+      tool_name: ddgo_search
+      tool_parameters: {}
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: webscraper
+      provider_name: webscraper
+      provider_type: builtin
+      tool_label: Web Scraper
+      tool_name: webscraper
+      tool_parameters:
+        url: ''
+        user_agent: ''
+  annotation_reply: {}
   chat_prompt_config: {}
   completion_prompt_config: {}
   dataset_configs:
@@ -328,17 +347,22 @@ model_config:
     12. **Specter Search Name** (`specterSearchName`) — Search companies by name. Use for competitors mentioned in other results.
     13. **Specter Text Search** (`specterTextSearch`) — Extract company/investor entities from unstructured text (press releases, bios). Max 1000 chars.
 
-    ### FAST WEB TOOLS (Tavily — use AFTER Cala + Specter)
+    ### FREE WEB TOOLS (DuckDuckGo + Web Scraper — PREFERRED for web search)
 
-    14. **Tavily Web Search** (`tavilyWebSearch`) — Real-time web search for recent news, funding rounds, product launches. ~2s. Call 1-3 times.
-    15. **Tavily Extract** (`tavilyExtract`) — Extract content from URLs. Use when evidence contains links that need deeper analysis. ~3s.
+    14. **DuckDuckGo Search** (`ddgo_search`) — FREE web search. Use this FIRST for all web lookups: news, funding, products, competitors. No API key needed. Call 2-5 times.
+    15. **Web Scraper** (`webscraper`) — FREE URL content extractor. Use to scrape full page content from URLs found in search results. No API key needed.
+
+    ### BACKUP WEB TOOLS (Tavily — use ONLY if DuckDuckGo returns no results)
+
+    16. **Tavily Web Search** (`tavilyWebSearch`) — Paid web search. Only use as fallback if DuckDuckGo didn't find what you need. ~2s.
+    17. **Tavily Extract** (`tavilyExtract`) — Paid URL extractor. Only use as fallback if Web Scraper fails. ~3s.
 
     ### DEEP WEB TOOLS (slow but powerful — use sparingly when fast tools are insufficient)
 
-    16. **Tavily Crawl** (`tavilyCrawl`) — ⚠️ SLOW (~30-60s). Crawl a website graph. Only use when you need to map an entire site structure.
-    17. **Tavily Research** (`tavilyResearch`) — ⚠️ VERY SLOW (~60-120s, ASYNC). Comprehensive multi-search research report. Returns a request_id — poll with tavilyResearchStatus. Only use for deep-dive research that justifies the wait.
-    18. **Tavily Research Status** (`tavilyResearchStatus`) — Poll for async tavilyResearch results.
-    19. **Web Extract** (`webExtract`) — Legacy URL scraper. Prefer tavilyExtract.
+    18. **Tavily Crawl** (`tavilyCrawl`) — ⚠️ SLOW (~30-60s). Crawl a website graph. Only use when you need to map an entire site structure.
+    19. **Tavily Research** (`tavilyResearch`) — ⚠️ VERY SLOW (~60-120s, ASYNC). Only for deep-dive research that justifies the wait.
+    20. **Tavily Research Status** (`tavilyResearchStatus`) — Poll for async tavilyResearch results.
+    21. **Web Extract** (`webExtract`) — Legacy. Prefer Web Scraper or tavilyExtract.
 
     ### ADVANCED / META TOOLS
 
@@ -366,15 +390,16 @@ model_config:
 
     ## TOOL STRATEGY BY SPECIALIZATION
 
-    - **market**: calaSearch ×3+ (TAM, growth, segments) + specterSimilarCompanies (landscape sizing) + specterCompanyById (competitor scale) + tavilyWebSearch (recent reports)
-    - **competition**: specterSimilarCompanies (MUST call first) → specterCompanyById on top 3-5 → calaSearch (competitive positioning) + tavilyWebSearch (recent moves)
-    - **traction**: specterCompanyPeople (MUST call first) → specterEnrichPerson (founder LinkedIn) + calaSearch (revenue, metrics) + tavilyWebSearch (recent launches)
+    - **market**: calaSearch ×3+ (TAM, growth, segments) + specterSimilarCompanies (landscape sizing) + specterCompanyById (competitor scale) + ddgo_search (recent reports) → webscraper (extract key pages)
+    - **competition**: specterSimilarCompanies (MUST call first) → specterCompanyById on top 3-5 → calaSearch (competitive positioning) + ddgo_search (recent moves) → webscraper (competitor pages)
+    - **traction**: specterCompanyPeople (MUST call first) → specterEnrichPerson (founder LinkedIn) + calaSearch (revenue, metrics) + ddgo_search (recent launches) → webscraper (press releases)
 
 
     ## SPEED GUIDELINES
 
     - Aim for 5-10 tool calls. Quality over quantity.
-    - Prefer `tavilyWebSearch` (~2s) over `tavilyCrawl` (~30-60s) and `tavilyResearch` (~60-120s) for most web lookups.
+    - Use `ddgo_search` (FREE) for all web searches FIRST. Only fall back to `tavilyWebSearch` if DuckDuckGo returns nothing.
+    - Use `webscraper` (FREE) to extract content from URLs. Only fall back to `tavilyExtract` if webscraper fails.
     - Only use slow tools (tavilyCrawl, tavilyResearch, lightpandaScrape) when fast alternatives didn't give you what you need.
     - Cala + Specter are fastest and have the best structured data — always try them first.
     - Complete ALL tool calls in rounds 1-4, then output JSON. No more than 5 rounds.

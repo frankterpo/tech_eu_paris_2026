@@ -9,9 +9,14 @@ const TMP_DATA = '/tmp/dealbot/data/deals';
 
 let DATA_DIR = CWD_DATA;
 try {
+  // Test write permission: mkdir is not enough on some serverless platforms where 
+  // existing dirs are read-only but mkdirSync on an existing dir doesn't throw.
   fs.mkdirSync(CWD_DATA, { recursive: true });
-} catch {
-  console.warn(`[Persistence] Cannot write to ${CWD_DATA} — falling back to ${TMP_DATA}`);
+  const testFile = path.join(CWD_DATA, '.write-test');
+  fs.writeFileSync(testFile, 'test');
+  fs.unlinkSync(testFile);
+} catch (err: any) {
+  console.warn(`[Persistence] Cannot write to ${CWD_DATA} — falling back to ${TMP_DATA}. Error: ${err?.message || err}`);
   DATA_DIR = TMP_DATA;
   fs.mkdirSync(TMP_DATA, { recursive: true });
 }
@@ -187,6 +192,8 @@ export class PersistenceManager {
 
     // ── 3. Fresh state — keep deal_input + company_profile ───────
     const freshState: any = {
+      deal_id: dealId,
+      created_at: new Date().toISOString(),
       deal_input: currentState.deal_input,
       evidence: [],
       company_profile: currentState.company_profile || null,
@@ -383,7 +390,7 @@ export class PersistenceManager {
   }
 
   /** Read LIVE_UPDATE events for narration/thinking excerpts. */
-  static getLiveUpdates(dealId: string): Array<{ phase: string; text: string; ts: string }> {
+  static getLiveUpdates(dealId: string): Array<{ phase: string; text: string; ts: string; toolInput?: string; toolOutput?: string }> {
     const filePath = path.join(DATA_DIR, dealId, 'events.jsonl');
     if (!fs.existsSync(filePath)) return [];
     try {
@@ -392,7 +399,13 @@ export class PersistenceManager {
         .filter(line => line.trim())
         .map(line => { try { return JSON.parse(line); } catch { return null; } })
         .filter((e: any) => e && e.type === 'LIVE_UPDATE')
-        .map((e: any) => ({ phase: e.payload.phase, text: e.payload.text, ts: e.ts }));
+        .map((e: any) => ({
+          phase: e.payload.phase,
+          text: e.payload.text,
+          ts: e.ts,
+          toolInput: e.payload.toolInput,
+          toolOutput: e.payload.toolOutput,
+        }));
     } catch { return []; }
   }
 

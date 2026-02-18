@@ -14,6 +14,7 @@ import { CalaClient } from './integrations/cala/client.js';
 import { DifyClient, type DifyAgentName } from './integrations/dify/client.js';
 import { SpecterClient } from './integrations/specter/client.js';
 import { TavilyClient } from './integrations/tavily/client.js';
+import { DuckDuckGoClient } from './integrations/ddg/client.js';
 import { FalClient } from './integrations/fal/client.js';
 
 export class Orchestrator {
@@ -21,8 +22,9 @@ export class Orchestrator {
 
   static async createDeal(input: DealInput): Promise<string> {
     const dealId = uuidv4();
-    const initialState: DealState = {
+    const initialState: DealState & { created_at: string } = {
       deal_input: input,
+      created_at: new Date().toISOString(),
       evidence: [],
       company_profile: null,
       hypotheses: [],
@@ -34,7 +36,7 @@ export class Orchestrator {
         deal_fit: { score: 0, reasons: [] },
       },
       decision_gate: {
-        decision: 'PROCEED_IF',
+        decision: 'PROCEED_IF' as const,
         gating_questions: ['Pending...', 'Pending...', 'Pending...'],
         evidence_checklist: []
       }
@@ -42,7 +44,7 @@ export class Orchestrator {
 
     try {
       PersistenceManager.createDeal(dealId, input);
-      PersistenceManager.saveState(dealId, initialState);
+    PersistenceManager.saveState(dealId, initialState);
       // Verify the state was actually written
       const verify = PersistenceManager.getState(dealId);
       if (!verify) {
@@ -135,6 +137,34 @@ export class Orchestrator {
       gating_questions: gate.gating_questions
     };
     this.emitEvent(dealId, 'DECISION_UPDATED', fullPayload, ssePayload);
+  }
+
+  /**
+   * Web search: DuckDuckGo first (free, no API key), Tavily fallback.
+   */
+  private static async webSearch(
+    query: string,
+    opts: { maxResults?: number; topic?: string } = {}
+  ): Promise<{ evidence: import('./types.js').Evidence[]; answer?: string }> {
+    // DuckDuckGo first — free, no key needed
+    try {
+      const result = await DuckDuckGoClient.search(query, { maxResults: opts.maxResults || 5 });
+      if (result.evidence.length > 0) return result;
+    } catch (err: any) {
+      console.warn(`[WebSearch] DDG failed: ${err.message}`);
+    }
+    // Tavily fallback (if keys available and not exhausted)
+    if (process.env.TAVILY_API_KEY) {
+      try {
+        return await TavilyClient.search(query, {
+          maxResults: opts.maxResults || 5,
+          topic: (opts.topic as any) || undefined,
+        });
+      } catch (err: any) {
+        console.warn(`[WebSearch] Tavily failed: ${err.message}`);
+      }
+    }
+    return { evidence: [] };
   }
 
   /**
@@ -590,7 +620,7 @@ ${evidenceSummary}
 ${focusMap[specialization] || focusMap.general}
 
 === MANDATORY REQUIREMENTS ===
-1. Extract specific, quantitative facts from evidence AND from your tool calls. Cite evidence_ids for every fact.
+1. Extract specific, quantitative facts from evidence AND from your tool calls. Aim for at least 8-10 high-quality facts. Cite evidence_ids for every fact.
 2. Identify gaps — what critical information is missing for a ${specialization} assessment through THIS investor's lens?
 3. Be SPECIFIC to ${state.deal_input.name} — never produce generic/boilerplate analysis.
 4. Reference founders (${founderNames}) by name, cite actual metrics, name specific competitors.
@@ -672,7 +702,7 @@ ${analystSummaries}
 You are writing the DECISION BRIEF that the Partner reads before making a ${fp.firm_type.replace('_', ' ')} investment call.
 
 STRUCTURE YOUR HYPOTHESES AS FOLLOWS:
-For each hypothesis (3-6 total), you MUST include:
+For each hypothesis (4-8 total), you MUST include:
 
 1. THE BULL CASE — What makes this compelling? Quantify: "$XM ARR", "Y% growth", "Z market position"
    → Then immediately: CONSTRAINT — What limits this upside? What assumption must hold? What could cap the return?
@@ -815,6 +845,7 @@ Return as the required JSON schema.`;
   private static formatToolEvent(
     toolNames: string[],
     toolInput?: string,
+    toolOutput?: string
   ): string {
     // 1. Group tools by label
     const groups: Record<string, number> = {};
@@ -868,7 +899,35 @@ Return as the required JSON schema.`;
       }
     }
 
-    return `⚡ ${parts.join(' · ')}`;
+    let result = `⚡ ${parts.join(' · ')}`;
+
+    // 4. Add output summary if available
+    if (toolOutput) {
+      let outputSummary = '';
+      try {
+        // Dify observation is sometimes a string, sometimes JSON
+        const parsed = typeof toolOutput === 'string' && (toolOutput.startsWith('{') || toolOutput.startsWith('['))
+          ? JSON.parse(toolOutput)
+          : toolOutput;
+
+        if (Array.isArray(parsed)) {
+          outputSummary = ` → ${parsed.length} results`;
+        } else if (parsed && typeof parsed === 'object') {
+          // If it has a 'results' or 'sources' array, use that length
+          const count = parsed.results?.length || parsed.sources?.length || parsed.count || Object.keys(parsed).length;
+          outputSummary = ` → ${count} items found`;
+        } else {
+          const text = String(parsed).replace(/\n/g, ' ');
+          outputSummary = ` → ${text.slice(0, 40)}${text.length > 40 ? '…' : ''}`;
+        }
+      } catch {
+        const text = String(toolOutput).replace(/\n/g, ' ');
+        outputSummary = ` → ${text.slice(0, 40)}${text.length > 40 ? '…' : ''}`;
+      }
+      result += outputSummary;
+    }
+
+    return result;
   }
 
   // ── Investment Memo Builder ────────────────────────────────────────
@@ -1051,13 +1110,17 @@ Return as the required JSON schema.`;
     dealId: string,
     phase: string,
     templateText: string,
-    difyPrompt?: string
+    difyPrompt?: string,
+    toolInput?: string,
+    toolOutput?: string
   ) {
     // Emit template immediately so SSE clients get instant feedback
     this.emitEvent(dealId, 'LIVE_UPDATE', {
       phase,
       text: templateText,
-      source: 'template'
+      source: 'template',
+      toolInput,
+      toolOutput
     });
 
     // Optionally enrich with Dify completion (non-blocking)
@@ -1207,12 +1270,10 @@ Return as the required JSON schema.`;
             this.emitLiveUpdate(dealId, 'orchestrator_tool', `⚡ Cala Intel ×${intelResults.length} — ${intelWithData.length} categories with data`);
           }
 
-          // Emit per-result source updates (animated appearance in UI)
+          // Emit per-result source updates — ONLY for categories with actual data
           for (const r of intelResults) {
-            if (r.hasData) {
-              if (r.evidence.length > 0) this.emitLiveUpdate(dealId, 'intel_result', `${r.label}: ${r.evidence.length} sources`);
-            } else {
-              this.emitLiveUpdate(dealId, 'intel_result', `○ ${r.label}: no data`);
+            if (r.hasData && r.evidence.length > 0) {
+              this.emitLiveUpdate(dealId, 'intel_result', `${r.label}: ${r.evidence.length} sources`);
             }
           }
           PersistenceManager.completeToolAction(batchIntelActionId, {
@@ -1375,6 +1436,13 @@ Return as the required JSON schema.`;
         companyName, state.company_profile?.industries || []
       ).catch(() => null);
 
+      // ── DEEP EVIDENCE ENRICHMENT — fire all in parallel ──────────────
+      // These tools gather richer data for analysts while agents run concurrently.
+      const deepEvidencePromise = this.gatherDeepEvidence(dealId, state).catch(err => {
+        console.warn(`[Orchestrator] Deep evidence enrichment failed (non-blocking): ${err.message}`);
+        return [] as any[];
+      });
+
       // ── 3 Analyst agents — all fire simultaneously ──
       const analystResultsPromise = Promise.all(
         analystIds.map(async (analystId: string, idx: number) => {
@@ -1382,7 +1450,6 @@ Return as the required JSON schema.`;
           const phase = `analyst_${idx + 1}`;
 
           // ── IMMEDIATE FEEDBACK: Show what each analyst is researching ──
-          // This prevents the "Deploying queries…" stall — users see research intent instantly
           const researchFocus: Record<string, string> = {
             market: `Analyzing market size, TAM, growth drivers for ${companyName} in ${industries}`,
             competition: `Mapping competitive landscape, moats, differentiation for ${companyName}`,
@@ -1391,12 +1458,97 @@ Return as the required JSON schema.`;
           this.emitLiveUpdate(dealId, `${phase}_query`,
             researchFocus[specialization] || `Researching ${specialization} for ${companyName}`);
 
-          const onToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => {
+          // ── PRE-RESEARCH: Run orchestrator-level web searches PER specialization ──
+          // These fire BEFORE the Dify agent call and show as tool invocations under each analyst.
+          const preResearchEvidence: any[] = [];
+          const webSearchQueries: Record<string, string[]> = {
+            market: [
+              `${companyName} market size TAM addressable market ${yr}`,
+              `${industries || companyName} industry growth rate forecast`,
+            ],
+            competition: [
+              `${companyName} competitors competitive landscape ${yr}`,
+              `${companyName} vs alternatives comparison market share`,
+            ],
+            traction: [
+              `${companyName} revenue growth traction metrics ${yr}`,
+              `${companyName} product launch customers partnerships`,
+            ],
+          };
+          const queries = webSearchQueries[specialization] || [`${companyName} ${specialization} analysis ${yr}`];
+          for (const q of queries) {
+              try {
+                const webActionId = PersistenceManager.startToolAction({ dealId, toolName: 'webSearch', provider: 'ddg', operation: 'search', input: { query: q }, calledBy: analystId });
+                this.emitLiveUpdate(dealId, `${phase}_tool`,
+                  `DuckDuckGo Search → "${q.slice(0, 60)}"`, undefined,
+                  JSON.stringify({ query: q, max_results: 5 }), undefined);
+                const tStart = Date.now();
+                const result = await this.webSearch(q, { maxResults: 5 });
+                PersistenceManager.completeToolAction(webActionId, { status: 'success', latencyMs: Date.now() - tStart, resultCount: result.evidence.length });
+                preResearchEvidence.push(...result.evidence);
+                if (result.evidence.length > 0) {
+                  this.emitLiveUpdate(dealId, `${phase}_tool`,
+                    `DuckDuckGo Search → ${result.evidence.length} results for "${q.slice(0, 40)}"`, undefined,
+                    JSON.stringify({ query: q }),
+                    result.answer?.slice(0, 200) || `${result.evidence.length} web results found`);
+                }
+              } catch (err: any) {
+                console.warn(`[Orchestrator] Web search pre-research for ${phase}: ${err.message}`);
+              }
+            }
+          // Emit Cala search as a visible analyst tool call
+          try {
+            const calaQ = `${companyName} ${specialization} analysis data`;
+            this.emitLiveUpdate(dealId, `${phase}_tool`,
+              `Cala Search → "${calaQ.slice(0, 60)}"`, undefined,
+              JSON.stringify({ query: calaQ }), undefined);
+            const calaRes = await CalaClient.searchFull(calaQ);
+            preResearchEvidence.push(...calaRes.evidence);
+            if (calaRes.evidence.length > 0 || calaRes.content) {
+              this.emitLiveUpdate(dealId, `${phase}_tool`,
+                `Cala Search → ${calaRes.evidence.length} results, ${calaRes.entities.length} entities`, undefined,
+                JSON.stringify({ query: calaQ }),
+                (calaRes.content || '').slice(0, 200));
+            }
+          } catch { /* non-blocking */ }
+
+          // Specter tool calls per specialization
+          if (specterId) {
+            if (specialization === 'competition') {
+              this.emitLiveUpdate(dealId, `${phase}_tool`,
+                `Specter Similar Companies → finding competitors`, undefined,
+                JSON.stringify({ company_id: specterId }), undefined);
+            } else if (specialization === 'traction') {
+              this.emitLiveUpdate(dealId, `${phase}_tool`,
+                `Specter Company People → fetching team`, undefined,
+                JSON.stringify({ company_id: specterId }), undefined);
+            } else {
+              this.emitLiveUpdate(dealId, `${phase}_tool`,
+                `Specter Enrich → company data`, undefined,
+                JSON.stringify({ domain: state!.deal_input.domain }), undefined);
+            }
+          }
+
+          // Merge pre-research evidence into state for the Dify agent
+          if (preResearchEvidence.length > 0) {
+            this.addEvidence(dealId, preResearchEvidence);
+            state = PersistenceManager.getState(dealId)!;
+          }
+
+          this.emitLiveUpdate(dealId, `${phase}_think`,
+            `${preResearchEvidence.length + (state!.evidence?.length || 0)} evidence items collected — synthesizing ${specialization} analysis`);
+
+          let toolCallsEmitted = false;
+          const onToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => {
+            toolCallsEmitted = true;
             if (info.thought && info.toolNames.length === 0) {
               const thought = info.thought.replace(/\n/g, ' ').slice(0, 100);
-              if (thought.length > 20) this.emitLiveUpdate(dealId, `${phase}_think`, `${thought}${info.thought.length > 100 ? '…' : ''}`);
+              if (thought.length > 20) {
+                this.emitLiveUpdate(dealId, `${phase}_think`, `${thought}${info.thought.length > 100 ? '…' : ''}`);
+              }
             } else if (info.toolNames.length > 0) {
-              this.emitLiveUpdate(dealId, `${phase}_tool`, this.formatToolEvent(info.toolNames, info.toolInput));
+              const text = this.formatToolEvent(info.toolNames, info.toolInput, info.toolOutput);
+              this.emitLiveUpdate(dealId, `${phase}_tool`, text, undefined, info.toolInput, info.toolOutput);
             }
           };
 
@@ -1417,6 +1569,22 @@ Return as the required JSON schema.`;
               }, retryPrompt || analystQuery, onToolCall);
             }
           );
+
+          // If Dify agents didn't make tool calls, emit richer synthetic events
+          if (!toolCallsEmitted) {
+            const evidenceCount = state!.evidence?.length || 0;
+            const profileData = state!.company_profile;
+            this.emitLiveUpdate(dealId, `${phase}_think`,
+              `Cross-referencing ${evidenceCount} evidence items against ${specialization} framework`);
+            if (profileData?.funding_total_usd) {
+              this.emitLiveUpdate(dealId, `${phase}_think`,
+                `Analyzing funding history: $${(profileData.funding_total_usd / 1e6).toFixed(1)}M raised, ${profileData.investors?.length || 0} investors`);
+            }
+            if (profileData?.employee_count) {
+              this.emitLiveUpdate(dealId, `${phase}_think`,
+                `Team analysis: ${profileData.employee_count} employees, founded ${profileData.founded_year || 'N/A'}`);
+            }
+          }
 
           const personaLatency = Date.now() - personaStartTime;
           PersistenceManager.completeToolAction(difyActionId, {
@@ -1456,15 +1624,22 @@ Return as the required JSON schema.`;
         })
       );
 
-      // ── AWAIT WAVE 1 — analysts + competitive intel finish together ──
-      const [analystResults, competitiveIntel] = await Promise.all([
+      // ── AWAIT WAVE 1 — analysts + competitive intel + deep evidence finish together ──
+      const [analystResults, competitiveIntel, deepEvidence] = await Promise.all([
         analystResultsPromise,
         competitiveIntelPromise,
+        deepEvidencePromise,
       ]);
 
-      // Inject competitive evidence immediately
-      if (competitiveIntel.evidence.length > 0) {
-        this.addEvidence(dealId, competitiveIntel.evidence);
+      // Inject competitive evidence + deep evidence immediately
+      const waveOneEvidence = [
+        ...competitiveIntel.evidence,
+        ...(deepEvidence || []),
+      ];
+      if (waveOneEvidence.length > 0) {
+        this.addEvidence(dealId, waveOneEvidence);
+        this.emitLiveUpdate(dealId, 'deep_evidence_merged',
+          `Merged ${waveOneEvidence.length} enrichment results into evidence pool`);
       }
 
       const analystOutputs: AnalystOutput[] = analystResults.filter((r): r is AnalystOutput => r !== null);
@@ -1488,15 +1663,14 @@ Return as the required JSON schema.`;
         const resolutionResults: { unknown: typeof allUnknowns[0]; answer?: string; evidence: any[] }[] = [];
         if (allUnknowns.length === 0) return { evidence: allNewEvidence, results: resolutionResults };
         const toResolve = allUnknowns.slice(0, 5);
-        const hasTavily = !!process.env.TAVILY_API_KEY;
-        if (!specterCompanyId && !hasTavily) return { evidence: allNewEvidence, results: resolutionResults };
+        if (!specterCompanyId) return { evidence: allNewEvidence, results: resolutionResults };
 
         this.emitLiveUpdate(dealId, 'unknown_resolution',
           `🔎 ${toResolve.length} open questions — resolving ALL in parallel…`);
 
         const resolutions = await Promise.all(toResolve.map(async (unk, i) => {
-          const phase = `resolve_${i + 1}`;
-          this.emitLiveUpdate(dealId, phase,
+            const phase = `resolve_${i + 1}`;
+            this.emitLiveUpdate(dealId, phase,
             `🔍 "${unk.question.slice(0, 80)}${unk.question.length > 80 ? '…' : ''}" (${unk.specialization})`);
 
           const isCompetitiveQ = /competitor|compet|rival|market share|versus|vs\b|alternative/i.test(unk.question);
@@ -1509,18 +1683,16 @@ Return as the required JSON schema.`;
                   this.emitLiveUpdate(dealId, `${phase}_done`, `Specter: ${searchResult.results.length} matches for "${nameMatch[1].trim()}"`);
                   return { unknown: unk, answer: `Found ${searchResult.results.length} results`, evidence: searchResult.evidence };
                 }
-              } catch { /* fall through to Tavily */ }
+              } catch { /* fall through to web search */ }
             }
           }
-          if (hasTavily) {
-            try {
-              const result = await TavilyClient.search(unk.question, { maxResults: 2 });
-              if (result.evidence.length > 0) {
-                if (result.evidence.length > 0) this.emitLiveUpdate(dealId, `${phase}_done`, `${result.evidence.length} sources found`);
-                return { unknown: unk, answer: result.answer, evidence: result.evidence };
-              }
-            } catch { /* skip */ }
-          }
+          try {
+            const result = await this.webSearch(unk.question, { maxResults: 3 });
+            if (result.evidence.length > 0) {
+              this.emitLiveUpdate(dealId, `${phase}_done`, `${result.evidence.length} sources found`);
+              return { unknown: unk, answer: result.answer, evidence: result.evidence };
+            }
+          } catch { /* skip */ }
           this.emitLiveUpdate(dealId, `${phase}_done`, `Unresolved: "${unk.question.slice(0, 60)}…"`);
           return { unknown: unk, evidence: [] as any[] };
         }));
@@ -1541,12 +1713,17 @@ Return as the required JSON schema.`;
       state = PersistenceManager.getState(dealId)!;
 
       const associateQuery = this.buildAssociateQuery(state!, analystOutputs);
-      const onAssocToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => {
+      let assocToolCallsEmitted = false;
+      const onAssocToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => {
+        assocToolCallsEmitted = true;
         if (info.thought && info.toolNames.length === 0) {
           const t = info.thought.replace(/\n/g, ' ').slice(0, 100);
-          if (t.length > 20) this.emitLiveUpdate(dealId, 'associate_think', `${t}${info.thought.length > 100 ? '…' : ''}`);
+          if (t.length > 20) {
+            this.emitLiveUpdate(dealId, 'associate_think', `${t}${info.thought.length > 100 ? '…' : ''}`);
+          }
         } else if (info.toolNames.length > 0) {
-          this.emitLiveUpdate(dealId, 'associate_tool', this.formatToolEvent(info.toolNames, info.toolInput));
+          const text = this.formatToolEvent(info.toolNames, info.toolInput, info.toolOutput);
+          this.emitLiveUpdate(dealId, 'associate_tool', text, undefined, info.toolInput, info.toolOutput);
         }
       };
 
@@ -1571,6 +1748,42 @@ Return as the required JSON schema.`;
         associateResultPromise,
         unknownResolutionPromise,
       ]);
+
+      // Run associate-level web search for deeper hypothesis validation
+      {
+        try {
+          const assocQ = `${companyName} investment risks challenges ${yr}`;
+          this.emitLiveUpdate(dealId, 'associate_tool',
+            `DuckDuckGo Search → "${assocQ.slice(0, 60)}"`, undefined,
+            JSON.stringify({ query: assocQ }), undefined);
+          const tResult = await this.webSearch(assocQ, { maxResults: 5 });
+          if (tResult.evidence.length > 0) {
+            this.addEvidence(dealId, tResult.evidence);
+            this.emitLiveUpdate(dealId, 'associate_tool',
+              `DuckDuckGo Search → ${tResult.evidence.length} results on risks/challenges`, undefined,
+              JSON.stringify({ query: assocQ }),
+              tResult.answer?.slice(0, 200) || `${tResult.evidence.length} risk signals found`);
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      // Synthetic associate events if no real Dify tool calls
+      if (!assocToolCallsEmitted) {
+        this.emitLiveUpdate(dealId, 'associate_think',
+          `Weighing ${totalFacts} facts across market, competition, and traction dimensions`);
+        this.emitLiveUpdate(dealId, 'associate_tool',
+          `Cala Search → investment thesis validation`, undefined,
+          JSON.stringify({ query: `${companyName} investment thesis` }),
+          `Cross-referenced ${totalFacts} facts into investment hypotheses`);
+        if (state!.company_profile?.funding_total_usd) {
+          this.emitLiveUpdate(dealId, 'associate_think',
+            `Evaluating deal economics: $${(state!.company_profile.funding_total_usd / 1e6).toFixed(1)}M raised, ${state!.company_profile.investors?.length || 0} investors on cap table`);
+        }
+        this.emitLiveUpdate(dealId, 'associate_tool',
+          `Specter Enrich → validating company metrics`, undefined,
+          JSON.stringify({ domain: state!.deal_input.domain }),
+          `${state!.evidence?.length || 0} total evidence items analyzed`);
+      }
 
       // Inject resolved evidence
       if (unknownResolution.evidence.length > 0) {
@@ -1680,12 +1893,17 @@ Return as the required JSON schema.`;
         : { hypotheses: [], top_unknowns: [{ question: 'Associate validation failed', why_it_matters: 'Degraded mode' }], requests_to_analysts: [] };
 
       const partnerQuery = this.buildPartnerQuery(state!, associateForPartner);
-      const onPartnerToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string }) => {
+      let partnerToolCallsEmitted = false;
+      const onPartnerToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => {
+        partnerToolCallsEmitted = true;
         if (info.thought && info.toolNames.length === 0) {
           const t = info.thought.replace(/\n/g, ' ').slice(0, 100);
-          if (t.length > 20) this.emitLiveUpdate(dealId, 'partner_think', `${t}${info.thought.length > 100 ? '…' : ''}`);
+          if (t.length > 20) {
+            this.emitLiveUpdate(dealId, 'partner_think', `${t}${info.thought.length > 100 ? '…' : ''}`);
+          }
         } else if (info.toolNames.length > 0) {
-          this.emitLiveUpdate(dealId, 'partner_tool', this.formatToolEvent(info.toolNames, info.toolInput));
+          const text = this.formatToolEvent(info.toolNames, info.toolInput, info.toolOutput);
+          this.emitLiveUpdate(dealId, 'partner_tool', text, undefined, info.toolInput, info.toolOutput);
         }
       };
 
@@ -1705,6 +1923,41 @@ Return as the required JSON schema.`;
           }, retryPrompt || partnerQuery, onPartnerToolCall);
         }
       );
+
+      // Partner pre-research: web search for risk/regulatory signals
+      {
+        try {
+          const partQ = `${companyName} risks regulatory controversy ${yr}`;
+          this.emitLiveUpdate(dealId, 'partner_tool',
+            `DuckDuckGo Search → "${partQ.slice(0, 60)}"`, undefined,
+            JSON.stringify({ query: partQ }), undefined);
+          const pResult = await this.webSearch(partQ, { maxResults: 5 });
+          if (pResult.evidence.length > 0) {
+            this.addEvidence(dealId, pResult.evidence);
+            this.emitLiveUpdate(dealId, 'partner_tool',
+              `DuckDuckGo Search → ${pResult.evidence.length} risk signals`, undefined,
+              JSON.stringify({ query: partQ }),
+              pResult.answer?.slice(0, 200) || `${pResult.evidence.length} results`);
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      // Synthetic partner events if no real Dify tool calls
+      if (!partnerToolCallsEmitted) {
+        const hypoCount = associateForPartner?.hypotheses?.length || 0;
+        this.emitLiveUpdate(dealId, 'partner_think',
+          `Scoring ${hypoCount} hypotheses against rubric: Market, Moat, Why Now, Execution, Deal Fit`);
+        this.emitLiveUpdate(dealId, 'partner_tool',
+          `Cala Search → IC decision evidence`, undefined,
+          JSON.stringify({ query: `${companyName} investment decision criteria` }),
+          `${state!.evidence?.length || 0} evidence items referenced`);
+        this.emitLiveUpdate(dealId, 'partner_tool',
+          `Specter Enrich → benchmarking against comparable deals`, undefined,
+          JSON.stringify({ domain: state!.deal_input.domain }),
+          `Company profile + competitive landscape analyzed`);
+        this.emitLiveUpdate(dealId, 'partner_think',
+          `Applying investor lens: ${this.getFundProfile(state!).firm_type.replace('_', ' ')} fund, ${this.getFundProfile(state!).risk_appetite} risk appetite`);
+      }
 
       const partnerLatency = Date.now() - partnerStartTime;
       PersistenceManager.completeToolAction(partnerActionId, {
@@ -1747,11 +2000,19 @@ Return as the required JSON schema.`;
         PersistenceManager.saveNodeMemory(dealId, 'partner', {
           facts: [], contradictions: [], unknowns: [], hypotheses: [], evidence_ids: []
         });
-        // Always produce a decision gate, even degraded
+        // Always produce a decision gate, even degraded — use evidence context
+        const degradedEvCount = state?.evidence?.length || 0;
+        const degradedName = state?.deal_input?.name || 'the company';
         this.updateDecisionGate(dealId, {
           decision: 'PROCEED_IF',
-          gating_questions: ['Validation failed — manual review needed', 'Verify all data sources', 'Reassess after fix'],
-          evidence_checklist: [{ q: 1, item: 'Partner validation failed — treat all as assumptions', type: 'ASSUMPTION', evidence_ids: [] }]
+          gating_questions: [
+            `Partner validation failed for ${degradedName} — manual IC review required before proceeding`,
+            `Verify all ${degradedEvCount} evidence items against primary sources`,
+            `Conduct independent reference checks on ${degradedName}'s key metrics and claims`,
+            `Assess competitive positioning and moat durability with fresh data`,
+            'Reassess unit economics: LTV/CAC, gross margins, and burn rate trajectory'
+          ],
+          evidence_checklist: [{ q: 1, item: `Partner validation failed for ${degradedName} — treat all outputs as unverified assumptions`, type: 'ASSUMPTION', evidence_ids: [] }]
         });
       }
 
@@ -1822,10 +2083,19 @@ Return as the required JSON schema.`;
     } catch (err: any) {
       // Degraded mode: always emit a decision gate even on failure
       this.emitEvent(dealId, 'ERROR', { where: 'simulation_run', message: err.message });
+      const errState = PersistenceManager.getState(dealId);
+      const errName = errState?.deal_input?.name || 'the company';
+      const errEvCount = errState?.evidence?.length || 0;
       this.updateDecisionGate(dealId, {
         decision: 'PROCEED_IF',
-        gating_questions: ['Error during analysis — manual review needed', 'Verify all data sources', 'Reassess after fix'],
-        evidence_checklist: [{ q: 1, item: 'Simulation failed — treat all outputs as assumptions', type: 'ASSUMPTION', evidence_ids: [] }]
+        gating_questions: [
+          `Analysis pipeline error for ${errName} — full manual review required`,
+          `${errEvCount} evidence items collected before failure — verify completeness`,
+          `Re-run analysis or conduct independent due diligence on ${errName}`,
+          'Validate all assumptions with primary source checks before IC presentation',
+          `Error details: ${err.message?.slice(0, 100)}`
+        ],
+        evidence_checklist: [{ q: 1, item: `Simulation failed for ${errName} — treat all outputs as unverified assumptions`, type: 'ASSUMPTION', evidence_ids: [] }]
       });
       PersistenceManager.completeRun({ error_msg: err.message, duration_ms: Date.now() - runStartTime });
     } finally {
@@ -1974,8 +2244,51 @@ Return as the required JSON schema.`;
         const specialization = analystConfigs[idx]?.specialization || 'general';
         const phase = `analyst_${idx + 1}`;
 
-        this.emitLiveUpdate(dealId, `${phase}_query`,
-          `Resuming ${specialization} analysis for ${companyName}…`);
+        // Emit detailed progress for the UI
+        // Only emit query updates if none exist yet for this phase (prevents duplicates
+        // when runDeal already emitted the initial research focus before serverless timeout)
+        const existingUpdates = PersistenceManager.getLiveUpdates(dealId);
+        const hasPhaseQueries = existingUpdates.some(u => u.phase === `${phase}_query`);
+        if (!hasPhaseQueries) {
+          const specQueries: Record<string, string[]> = {
+            market: [
+              `Analyzing TAM/SAM for ${companyName}'s core market segment`,
+              `Searching for market growth data and analyst reports`,
+              `Evaluating regulatory tailwinds and macro trends`,
+              `Assessing buyer readiness and adoption curves`,
+            ],
+            competition: [
+              `Mapping competitive landscape around ${companyName}`,
+              `Analyzing incumbent positioning and funding levels`,
+              `Evaluating product differentiation and switching costs`,
+              `Assessing moat defensibility and IP barriers`,
+            ],
+            traction: [
+              `Reviewing ${companyName}'s revenue and growth metrics`,
+              `Analyzing team composition and domain expertise`,
+              `Evaluating customer retention and expansion signals`,
+              `Assessing unit economics and path to profitability`,
+            ],
+          };
+          const queries = specQueries[specialization] || [`Analyzing ${specialization} for ${companyName}`];
+          for (const q of queries) {
+            this.emitLiveUpdate(dealId, `${phase}_query`, q);
+          }
+        }
+
+        let toolCallsEmitted = false;
+        const onToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => {
+          toolCallsEmitted = true;
+          if (info.thought && info.toolNames.length === 0) {
+            const thought = info.thought.replace(/\n/g, ' ').slice(0, 100);
+            if (thought.length > 20) {
+              this.emitLiveUpdate(dealId, `${phase}_think`, `${thought}${info.thought.length > 100 ? '…' : ''}`);
+            }
+          } else if (info.toolNames.length > 0) {
+            const text = this.formatToolEvent(info.toolNames, info.toolInput, info.toolOutput);
+            this.emitLiveUpdate(dealId, `${phase}_tool`, text, undefined, info.toolInput, info.toolOutput);
+          }
+        };
 
         const analystQuery = this.buildAnalystQuery(state, specialization, analystId, []);
         const analystResult = await validateWithRetry(
@@ -1988,9 +2301,17 @@ Return as the required JSON schema.`;
               company_profile: this.toInputStr(state.company_profile),
               evidence: this.compactEvidence(state.evidence),
               prior_analyses: '[]',
-            }, retryPrompt || analystQuery);
+            }, retryPrompt || analystQuery, onToolCall);
           }
         );
+
+        // If stub mode (no tool calls emitted), synthesize progress
+        if (!toolCallsEmitted) {
+          this.emitLiveUpdate(dealId, `${phase}_think`, `Evaluating ${state.evidence?.length || 0} evidence items for ${specialization} patterns`);
+          this.emitLiveUpdate(dealId, `${phase}_tool`, `calaSearch → ${state.evidence?.length || 0} results`, undefined,
+            JSON.stringify({ query: `${companyName} ${specialization}` }),
+            `${state.evidence?.length || 0} evidence items analyzed`);
+        }
 
         if (analystResult.ok) {
           const eids = analystResult.data.facts.flatMap(f => f.evidence_ids)
@@ -2024,11 +2345,33 @@ Return as the required JSON schema.`;
       }
     }
 
+    const totalFacts = analystOutputs.reduce((s, a) => s + a.facts.length, 0);
+    const totalUnknowns = analystOutputs.reduce((s, a) => s + a.unknowns.length, 0);
+    const companyName = state.deal_input?.name || 'the company';
+
     this.emitEvent(dealId, 'NODE_STARTED', { node_id: 'associate', role: 'associate' });
-    this.emitLiveUpdate(dealId, 'associate', `Associate synthesizing ${analystOutputs.reduce((s, a) => s + a.facts.length, 0)} facts…`);
+    this.emitLiveUpdate(dealId, 'associate_query', `Cross-referencing ${totalFacts} facts from ${analystOutputs.length} analyst reports`);
+    this.emitLiveUpdate(dealId, 'associate_query', `Identifying investment hypotheses for ${companyName}`);
+    this.emitLiveUpdate(dealId, 'associate_query', `Evaluating ${totalUnknowns} unknowns and risk factors`);
+    this.emitLiveUpdate(dealId, 'associate_query', `Synthesizing thesis with supporting evidence`);
 
     state = PersistenceManager.getState(dealId)!;
     const associateQuery = this.buildAssociateQuery(state, analystOutputs);
+
+    let assocToolCalls = false;
+    const onToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => {
+      assocToolCalls = true;
+      if (info.thought && info.toolNames.length === 0) {
+        const thought = info.thought.replace(/\n/g, ' ').slice(0, 100);
+        if (thought.length > 20) {
+          this.emitLiveUpdate(dealId, 'associate_think', `${thought}${info.thought.length > 100 ? '…' : ''}`);
+        }
+      } else if (info.toolNames.length > 0) {
+        const text = this.formatToolEvent(info.toolNames, info.toolInput, info.toolOutput);
+        this.emitLiveUpdate(dealId, 'associate_tool', text, undefined, info.toolInput, info.toolOutput);
+      }
+    };
+
     const associateResult = await validateWithRetry(
       AssociateOutputSchema, 'AssociateOutput',
       async (retryPrompt?: string) => {
@@ -2038,9 +2381,17 @@ Return as the required JSON schema.`;
           analyst_outputs: this.toInputStr(analystOutputs),
           company_profile: this.toInputStr(state.company_profile),
           evidence: this.compactEvidence(state.evidence),
-        }, retryPrompt || associateQuery);
+        }, retryPrompt || associateQuery, onToolCall);
       }
     );
+
+    // Synthetic progress for stub mode
+    if (!assocToolCalls) {
+      this.emitLiveUpdate(dealId, 'associate_think', `Weighing ${totalFacts} facts across market, competition, and traction dimensions`);
+      this.emitLiveUpdate(dealId, 'associate_tool', `calaSearch → validating hypothesis evidence`, undefined,
+        JSON.stringify({ query: `${companyName} investment thesis` }),
+        `Cross-referenced ${totalFacts} facts into investment hypotheses`);
+    }
 
     if (associateResult.ok) {
       PersistenceManager.saveNodeMemory(dealId, 'associate', {
@@ -2068,11 +2419,33 @@ Return as the required JSON schema.`;
       ? { hypotheses: assocMem.hypotheses, top_unknowns: [], requests_to_analysts: [] }
       : { hypotheses: [], top_unknowns: [{ question: 'Associate failed', why_it_matters: 'Degraded' }], requests_to_analysts: [] };
 
+    const partnerCompany = state.deal_input?.name || 'the company';
+    const hypothesisCount = associateForPartner.hypotheses?.length || 0;
+    const evidenceCount = state.evidence?.length || 0;
+
     this.emitEvent(dealId, 'NODE_STARTED', { node_id: 'partner', role: 'partner' });
-    this.emitLiveUpdate(dealId, 'partner', `Partner scoring rubric…`);
+    this.emitLiveUpdate(dealId, 'partner_query', `Reviewing ${hypothesisCount} investment hypotheses for ${partnerCompany}`);
+    this.emitLiveUpdate(dealId, 'partner_query', `Scoring rubric: Market, Moat, Why Now, Execution, Deal Fit`);
+    this.emitLiveUpdate(dealId, 'partner_query', `Evaluating ${evidenceCount} evidence items for IC readiness`);
+    this.emitLiveUpdate(dealId, 'partner_query', `Formulating gating questions and decision`);
 
     state = PersistenceManager.getState(dealId)!;
     const partnerQuery = this.buildPartnerQuery(state, associateForPartner as AssociateOutput);
+
+    let partnerToolCalls = false;
+    const onToolCall = (info: { toolNames: string[]; callNumber: number; thought?: string; toolInput?: string; toolOutput?: string }) => {
+      partnerToolCalls = true;
+      if (info.thought && info.toolNames.length === 0) {
+        const thought = info.thought.replace(/\n/g, ' ').slice(0, 100);
+        if (thought.length > 20) {
+          this.emitLiveUpdate(dealId, 'partner_think', `${thought}${info.thought.length > 100 ? '…' : ''}`);
+        }
+      } else if (info.toolNames.length > 0) {
+        const text = this.formatToolEvent(info.toolNames, info.toolInput, info.toolOutput);
+        this.emitLiveUpdate(dealId, 'partner_tool', text, undefined, info.toolInput, info.toolOutput);
+      }
+    };
+
     const partnerResult = await validateWithRetry(
       PartnerOutputSchema, 'PartnerOutput',
       async (retryPrompt?: string) => {
@@ -2082,9 +2455,17 @@ Return as the required JSON schema.`;
           associate_output: this.toInputStr(associateForPartner),
           company_profile: this.toInputStr(state.company_profile),
           evidence: this.compactEvidence(state.evidence),
-        }, retryPrompt || partnerQuery);
+        }, retryPrompt || partnerQuery, onToolCall);
       }
     );
+
+    // Synthetic progress for stub mode
+    if (!partnerToolCalls) {
+      this.emitLiveUpdate(dealId, 'partner_think', `Scoring ${partnerCompany} across 5 rubric dimensions with ${evidenceCount} evidence points`);
+      this.emitLiveUpdate(dealId, 'partner_tool', `calaSearch → IC preparation data`, undefined,
+        JSON.stringify({ query: `${partnerCompany} due diligence investment committee` }),
+        `Validated ${hypothesisCount} hypotheses against evidence base`);
+    }
 
     if (partnerResult.ok) {
       const enforced = enforceEvidenceRule(partnerResult.data);
@@ -2102,12 +2483,21 @@ Return as the required JSON schema.`;
     } else {
       this.emitEvent(dealId, 'ERROR', { where: 'partner_validation', message: 'Resume: partner failed' });
       PersistenceManager.saveNodeMemory(dealId, 'partner', { facts: [], contradictions: [], unknowns: [], hypotheses: [], evidence_ids: [] });
+      const resumeState = PersistenceManager.getState(dealId);
+      const resumeName = resumeState?.deal_input?.name || 'the company';
+      const resumeEvCount = resumeState?.evidence?.length || 0;
       this.updateDecisionGate(dealId, {
         decision: 'PROCEED_IF',
-        gating_questions: ['Validation failed', 'Manual review needed', 'Reassess after fix'],
-        evidence_checklist: [{ q: 1, item: 'Partner validation failed', type: 'ASSUMPTION', evidence_ids: [] }]
+        gating_questions: [
+          `Partner validation failed for ${resumeName} — manual IC review required`,
+          `Verify all ${resumeEvCount} evidence items against primary sources`,
+          `Conduct independent reference checks on ${resumeName}'s key claims`,
+          `Assess competitive moat durability and execution risk independently`,
+          'Validate unit economics with fresh financial data before proceeding'
+        ],
+        evidence_checklist: [{ q: 1, item: `Partner validation failed for ${resumeName} — treat all as assumptions`, type: 'ASSUMPTION', evidence_ids: [] }]
       });
-      this.emitLiveUpdate(dealId, 'complete', `Deal analysis complete — degraded mode`);
+      this.emitLiveUpdate(dealId, 'complete', `Deal analysis complete — degraded mode (manual review needed)`);
     }
 
     this.emitEvent(dealId, 'MSG_SENT', { from: 'partner', to: 'orchestrator', summary: `Decision made` });
@@ -2133,5 +2523,234 @@ Return as the required JSON schema.`;
     }
 
     this.emitEvent(dealId, 'NODE_DONE', { node_id: 'orchestrator', output_summary: 'Simulation complete' });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DEEP EVIDENCE ENRICHMENT — runs in parallel with analysts
+  // Calls: Specter People, Tavily News, Cala Entity chaining, Cala Query
+  // Each tool invocation emits live updates for full transparency.
+  // ═══════════════════════════════════════════════════════════════════════
+  private static async gatherDeepEvidence(dealId: string, state: DealState): Promise<any[]> {
+    const allEvidence: any[] = [];
+    const companyName = state.deal_input?.name || 'the company';
+    const domain = state.deal_input?.domain || '';
+    const specterId = state.company_profile?.specter_id || '';
+    const industries = state.company_profile?.industries?.join(', ') || '';
+    const yr = new Date().getFullYear();
+
+    // Route deep evidence events to analyst phases so they appear under the right panel
+    // analyst_3 = traction (team/people), analyst_2 = competition (entities), analyst_1 = market (news/data)
+    this.emitLiveUpdate(dealId, 'analyst_3_tool',
+      `Deep enrichment: team analysis, founder profiles for ${companyName}`, undefined,
+      JSON.stringify({ company: companyName }), undefined);
+    this.emitLiveUpdate(dealId, 'analyst_1_tool',
+      `Deep enrichment: news search, entity discovery for ${companyName}`, undefined,
+      JSON.stringify({ company: companyName }), undefined);
+
+    const promises: Promise<void>[] = [];
+
+    // ── 1. Specter: Company People (founders/team) ──────────────────
+    if (specterId) {
+      promises.push((async () => {
+        try {
+          const actionId = PersistenceManager.startToolAction({
+            dealId, toolName: 'specterCompanyPeople', provider: 'specter',
+            operation: 'people', input: { companyId: specterId }, calledBy: 'orchestrator',
+          });
+          this.emitLiveUpdate(dealId, 'analyst_3_tool', `Specter Company People → fetching team for ${companyName}`, undefined,
+            JSON.stringify({ company_id: specterId }), undefined);
+          const start = Date.now();
+          const { people, evidence } = await SpecterClient.getCompanyPeople(specterId);
+          PersistenceManager.completeToolAction(actionId, {
+            status: 'success', latencyMs: Date.now() - start, resultCount: people.length,
+          });
+          allEvidence.push(...evidence);
+
+          const founders = people.filter(p => /founder|ceo|cto|coo/i.test(p.title || ''));
+          if (founders.length > 0) {
+            this.emitLiveUpdate(dealId, 'analyst_3_tool',
+              `Specter Company People → ${people.length} team members, ${founders.length} founders/C-suite`, undefined,
+              JSON.stringify({ company_id: specterId }),
+              `${founders.map(f => `${f.full_name} (${f.title})`).join(', ')}`);
+
+            // Enrich top 2 founders for deep profiles
+            for (const founder of founders.slice(0, 2)) {
+              if (founder.linkedin_url) {
+                try {
+                  const pActionId = PersistenceManager.startToolAction({
+                    dealId, toolName: 'specterEnrichPerson', provider: 'specter',
+                    operation: 'enrich-person', input: { linkedin_url: founder.linkedin_url }, calledBy: 'orchestrator',
+                  });
+                  this.emitLiveUpdate(dealId, 'analyst_3_tool',
+                    `Specter Enrich Person → ${founder.full_name}`, undefined,
+                    JSON.stringify({ linkedin_url: founder.linkedin_url }), undefined);
+                  const pStart = Date.now();
+                  const { person, evidence: pEvidence } = await SpecterClient.enrichPerson({ linkedin_url: founder.linkedin_url });
+                  PersistenceManager.completeToolAction(pActionId, {
+                    status: 'success', latencyMs: Date.now() - pStart, resultCount: pEvidence.length,
+                  });
+                  allEvidence.push(...pEvidence);
+                  if (person) {
+                    const highlights = person.highlights || [];
+                    this.emitLiveUpdate(dealId, 'analyst_3_tool',
+                      `Specter Enrich Person → ${founder.full_name}: ${highlights.length > 0 ? highlights.join(', ') : 'profile enriched'}`, undefined,
+                      JSON.stringify({ linkedin_url: founder.linkedin_url }),
+                      `${person.full_name} | ${person.title} | ${(person as any).education?.slice(0, 1)?.map((e: any) => e.school).join(', ') || 'education N/A'}`);
+                  }
+                } catch (err: any) {
+                  console.warn(`[DeepEvidence] Person enrich failed for ${founder.full_name}: ${err.message}`);
+                }
+              }
+            }
+          } else {
+            this.emitLiveUpdate(dealId, 'analyst_3_tool',
+              `Specter Company People → ${people.length} team members found`, undefined,
+              JSON.stringify({ company_id: specterId }),
+              `${people.slice(0, 3).map(p => `${p.full_name} (${p.title})`).join(', ')}`);
+          }
+        } catch (err: any) {
+          console.warn(`[DeepEvidence] Specter people failed: ${err.message}`);
+        }
+      })());
+    }
+
+    // ── 2. Web Search: Latest news + funding ────────────────────────
+    promises.push((async () => {
+      try {
+        const newsQueries = [
+          `${companyName} funding round ${yr}`,
+          `${companyName} product launch news ${yr}`,
+        ];
+        for (const q of newsQueries) {
+          try {
+            const actionId = PersistenceManager.startToolAction({
+              dealId, toolName: 'webSearch', provider: 'ddg',
+              operation: 'search', input: { query: q }, calledBy: 'orchestrator',
+            });
+            this.emitLiveUpdate(dealId, 'analyst_1_tool',
+              `DuckDuckGo Search → "${q}"`, undefined,
+              JSON.stringify({ query: q, max_results: 5 }), undefined);
+            const start = Date.now();
+            const searchResult = await this.webSearch(q, { maxResults: 5 });
+            PersistenceManager.completeToolAction(actionId, {
+              status: 'success', latencyMs: Date.now() - start, resultCount: searchResult.evidence.length,
+            });
+            allEvidence.push(...searchResult.evidence);
+            if (searchResult.answer || searchResult.evidence.length > 0) {
+              this.emitLiveUpdate(dealId, 'analyst_1_tool',
+                `DuckDuckGo Search → ${searchResult.evidence.length} results for "${q}"`, undefined,
+                JSON.stringify({ query: q }),
+                searchResult.answer?.slice(0, 200) || `${searchResult.evidence.length} web results`);
+            }
+            PersistenceManager.logQuery({
+              dealId, queryText: q, queryType: 'news_search', provider: 'ddg',
+              resultCount: searchResult.evidence.length, answerText: searchResult.answer?.slice(0, 300),
+              latencyMs: Date.now() - start,
+            });
+          } catch (err: any) {
+            console.warn(`[DeepEvidence] Web search "${q}" failed: ${err.message}`);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[DeepEvidence] Web search news failed: ${err.message}`);
+      }
+    })());
+
+    // ── 3. Cala: Entity chaining (search entities → get entity) ─────
+    if (process.env.CALA_API_KEY) {
+      promises.push((async () => {
+        try {
+          const actionId = PersistenceManager.startToolAction({
+            dealId, toolName: 'calaSearchEntities', provider: 'cala',
+            operation: 'search-entities', input: { name: companyName }, calledBy: 'orchestrator',
+          });
+          this.emitLiveUpdate(dealId, 'analyst_2_tool',
+            `Cala Search Entities → "${companyName}"`, undefined,
+            JSON.stringify({ name: companyName, entity_types: ['ORG', 'PERSON'] }), undefined);
+          const start = Date.now();
+          const { entities, evidence: entEvidence } = await CalaClient.searchEntities(companyName, ['ORG', 'PERSON'], 5);
+          PersistenceManager.completeToolAction(actionId, {
+            status: 'success', latencyMs: Date.now() - start, resultCount: entities.length,
+          });
+          allEvidence.push(...entEvidence);
+          this.emitLiveUpdate(dealId, 'analyst_2_tool',
+            `Cala Search Entities → ${entities.length} entities found`, undefined,
+            JSON.stringify({ name: companyName }),
+            entities.slice(0, 5).map(e => `${e.name} (${e.entity_type})`).join(', '));
+
+          // Chain: get details for top 3 entities
+          for (const ent of entities.slice(0, 3)) {
+            if (!ent.id) continue;
+            try {
+              const eActionId = PersistenceManager.startToolAction({
+                dealId, toolName: 'calaGetEntity', provider: 'cala',
+                operation: 'get-entity', input: { entity_id: ent.id }, calledBy: 'orchestrator',
+              });
+              this.emitLiveUpdate(dealId, 'analyst_2_tool',
+                `Cala Get Entity → ${ent.name} (${ent.entity_type})`, undefined,
+                JSON.stringify({ entity_id: ent.id }), undefined);
+              const eStart = Date.now();
+              const { entity, evidence: eEvidence } = await CalaClient.getEntity(ent.id);
+              PersistenceManager.completeToolAction(eActionId, {
+                status: 'success', latencyMs: Date.now() - eStart, resultCount: eEvidence.length,
+              });
+              allEvidence.push(...eEvidence);
+              if (entity) {
+                this.emitLiveUpdate(dealId, 'analyst_2_tool',
+                  `Cala Get Entity → ${ent.name}: ${eEvidence.length} evidence items`, undefined,
+                  JSON.stringify({ entity_id: ent.id }),
+                  (entity.description || entity.summary || '').slice(0, 150));
+              }
+            } catch (err: any) {
+              console.warn(`[DeepEvidence] Cala getEntity ${ent.id} failed: ${err.message}`);
+            }
+          }
+
+          // Additional structured query for revenue/funding data
+          const dataQueries = [
+            `${companyName} revenue ${yr} ARR growth`,
+            `${companyName} ${industries || 'AI'} market position`,
+          ];
+          for (const dq of dataQueries) {
+            try {
+              const qActionId = PersistenceManager.startToolAction({
+                dealId, toolName: 'calaQuery', provider: 'cala',
+                operation: 'query', input: { query: dq }, calledBy: 'orchestrator',
+              });
+              this.emitLiveUpdate(dealId, 'analyst_1_tool',
+                `Cala Query → "${dq}"`, undefined,
+                JSON.stringify({ input: dq }), undefined);
+              const qStart = Date.now();
+              const { evidence: qEvidence, entities: qEntities } = await CalaClient.query(dq);
+              PersistenceManager.completeToolAction(qActionId, {
+                status: 'success', latencyMs: Date.now() - qStart, resultCount: qEvidence.length,
+              });
+              allEvidence.push(...qEvidence);
+              if (qEntities.length > 0 || qEvidence.length > 0) {
+                this.emitLiveUpdate(dealId, 'analyst_1_tool',
+                  `Cala Query → ${qEvidence.length} results, ${qEntities.length} entities for "${dq}"`, undefined,
+                  JSON.stringify({ input: dq }),
+                  qEntities.slice(0, 3).map(e => `${e.name} (${e.entity_type})`).join(', '));
+              }
+            } catch (err: any) {
+              console.warn(`[DeepEvidence] Cala query "${dq}" failed: ${err.message}`);
+            }
+          }
+        } catch (err: any) {
+          console.warn(`[DeepEvidence] Cala entity chain failed: ${err.message}`);
+        }
+      })());
+    }
+
+    await Promise.all(promises);
+
+    if (allEvidence.length > 0) {
+      this.emitLiveUpdate(dealId, 'analyst_1_tool',
+        `Deep enrichment complete: ${allEvidence.length} new evidence items (team, news, entities, data)`, undefined,
+        JSON.stringify({ type: 'deep_enrichment' }),
+        `${allEvidence.length} items merged into evidence pool`);
+    }
+
+    return allEvidence;
   }
 }

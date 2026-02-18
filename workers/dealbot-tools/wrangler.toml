@@ -1,0 +1,8 @@
+name = "dealbot-tools"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+CALA_BASE = "https://api.cala.ai/v1/knowledge"
+SPECTER_BASE = "https://app.tryspecter.com/api/v1"
+TAVILY_BASE = "https://api.tavily.com"
