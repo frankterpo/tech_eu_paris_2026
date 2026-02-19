@@ -1,0 +1,49 @@
+{
+  "../node_modules/skybridge/dist/web/components/modal-provider.js": {
+    "file": "assets/modal-provider-BHhQEhtQ.js",
+    "name": "modal-provider",
+    "src": "../node_modules/skybridge/dist/web/components/modal-provider.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_helpers-a_il61DA.js"
+    ]
+  },
+  "_helpers-a_il61DA.js": {
+    "file": "assets/helpers-a_il61DA.js",
+    "name": "helpers",
+    "dynamicImports": [
+      "../node_modules/skybridge/dist/web/components/modal-provider.js"
+    ]
+  },
+  "src/widgets/company-profile.tsx": {
+    "file": "assets/company-profile-andBTgBD.js",
+    "name": "company-profile",
+    "src": "src/widgets/company-profile.tsx",
+    "isEntry": true,
+    "imports": [
+      "_helpers-a_il61DA.js"
+    ]
+  },
+  "src/widgets/deal-dashboard.tsx": {
+    "file": "assets/deal-dashboard-B3_ENNka.js",
+    "name": "deal-dashboard",
+    "src": "src/widgets/deal-dashboard.tsx",
+    "isEntry": true,
+    "imports": [
+      "_helpers-a_il61DA.js"
+    ]
+  },
+  "src/widgets/trigger-setup.tsx": {
+    "file": "assets/trigger-setup-CPKJEpjB.js",
+    "name": "trigger-setup",
+    "src": "src/widgets/trigger-setup.tsx",
+    "isEntry": true,
+    "imports": [
+      "_helpers-a_il61DA.js"
+    ]
+  },
+  "style.css": {
+    "file": "assets/style-CJk7-MFM.css",
+    "src": "style.css"
+  }
+}
